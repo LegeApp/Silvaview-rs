@@ -1,0 +1,291 @@
+use crate::tree::arena::{FileTree, NodeId};
+use std::collections::HashMap;
+
+/// A positioned rectangle in the treemap layout.
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutRect {
+    pub node: NodeId,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub depth: u16,
+}
+
+/// The full layout result (rects + fast lookup).
+#[derive(Debug)]
+pub struct Layout {
+    /// All visible rectangles (files + directories for interaction)
+    pub rects: Vec<LayoutRect>,
+    /// node → index into `rects` (O(1) hover, tooltip, highlighting)
+    pub node_to_rect: HashMap<NodeId, usize>,
+}
+
+/// Configuration for treemap layout.
+#[derive(Clone)]
+pub struct LayoutConfig {
+    /// Minimum screen area (px²) to render a node (LOD culling)
+    pub min_area: f32,
+    /// Base padding between siblings (px)
+    pub padding: f32,
+    /// How much padding shrinks per nesting level (0.0 = constant, 0.7 = nice taper)
+    pub padding_falloff: f32,
+    /// Maximum recursion depth (safety + performance)
+    pub max_depth: u16,
+    /// Target aspect ratio for squarified layout (1.0 = square-ish)
+    pub aspect_tolerance: f64,
+}
+
+impl Default for LayoutConfig {
+    fn default() -> Self {
+        Self {
+            min_area: 4.0,
+            padding: 2.0,
+            padding_falloff: 0.75,
+            max_depth: 64,
+            aspect_tolerance: 1.0,
+        }
+    }
+}
+
+/// Compute layout for any subtree (root can be any directory for drill-down).
+pub fn compute_layout(
+    tree: &FileTree,
+    root: NodeId,
+    viewport_w: f32,
+    viewport_h: f32,
+    config: &LayoutConfig,
+) -> Layout {
+    let mut rects = Vec::with_capacity(tree.len() / 4); // rough estimate
+    let mut node_to_rect = HashMap::with_capacity(rects.capacity());
+
+    let root_rect = LayoutRect {
+        node: root,
+        x: 0.0,
+        y: 0.0,
+        w: viewport_w,
+        h: viewport_h,
+        depth: 0,
+    };
+
+    rects.push(root_rect);
+    node_to_rect.insert(root, 0);
+
+    if tree.get(root).is_dir {
+        layout_children(
+            tree,
+            root,
+            0.0,
+            0.0,
+            viewport_w,
+            viewport_h,
+            0,
+            config,
+            &mut rects,
+            &mut node_to_rect,
+        );
+    }
+
+    Layout { rects, node_to_rect }
+}
+
+/// Recursively layout children (now with sorting + better culling).
+fn layout_children(
+    tree: &FileTree,
+    parent: NodeId,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    depth: u16,
+    config: &LayoutConfig,
+    rects: &mut Vec<LayoutRect>,
+    node_to_rect: &mut HashMap<NodeId, usize>,
+) {
+    if depth >= config.max_depth {
+        return;
+    }
+
+    // Dynamic padding that tapers with depth
+    let pad = if depth == 0 {
+        0.0
+    } else {
+        config.padding * config.padding_falloff.powi(depth as i32)
+    };
+    let inner_x = x + pad;
+    let inner_y = y + pad;
+    let inner_w = (w - 2.0 * pad).max(0.0);
+    let inner_h = (h - 2.0 * pad).max(0.0);
+
+    if inner_w * inner_h < config.min_area {
+        return;
+    }
+
+    let parent_node = tree.get(parent);
+    let parent_size = parent_node.size as f64;
+    if parent_size <= 0.0 {
+        tracing::debug!(
+            "Skipping layout for parent {:?} '{}' with zero size at depth {}",
+            parent,
+            parent_node.name,
+            depth
+        );
+        return;
+    }
+
+    // Collect + sort children by size descending (critical for good squarified layout)
+    let mut children: Vec<NodeId> = tree.children(parent).collect();
+    children.sort_by_key(|&id| std::cmp::Reverse(tree.get(id).size));
+
+    if children.is_empty() {
+        return;
+    }
+
+    if depth == 0 {
+        tracing::info!(
+            "Laying out {} children of root '{}' (size={:.2} GB) in {:.0}x{:.0} area",
+            children.len(),
+            parent_node.name,
+            parent_size / 1_073_741_824.0,
+            inner_w,
+            inner_h
+        );
+    }
+
+    // Normalized areas
+    let total_area = (inner_w as f64) * (inner_h as f64);
+    let areas: Vec<f64> = children
+        .iter()
+        .map(|&id| (tree.get(id).size as f64 / parent_size) * total_area)
+        .collect();
+
+    // Squarified layout
+    let positioned = squarify(&areas, inner_x as f64, inner_y as f64, inner_w as f64, inner_h as f64);
+
+    for (i, pos) in positioned.iter().enumerate() {
+        let child_id = children[i];
+        let child_depth = depth + 1;
+
+        let area = (pos.w * pos.h) as f32;
+        if area < config.min_area {
+            continue;
+        }
+
+        let rect = LayoutRect {
+            node: child_id,
+            x: pos.x as f32,
+            y: pos.y as f32,
+            w: pos.w as f32,
+            h: pos.h as f32,
+            depth: child_depth,
+        };
+
+        let idx = rects.len();
+        rects.push(rect);
+        node_to_rect.insert(child_id, idx);
+
+        // Recurse only into directories
+        if tree.get(child_id).is_dir {
+            layout_children(
+                tree,
+                child_id,
+                pos.x as f32,
+                pos.y as f32,
+                pos.w as f32,
+                pos.h as f32,
+                child_depth,
+                config,
+                rects,
+                node_to_rect,
+            );
+        }
+    }
+}
+
+/// Improved squarified layout (tries multiple row lengths for better aspect ratios).
+fn squarify(areas: &[f64], mut x: f64, mut y: f64, mut w: f64, mut h: f64) -> Vec<Positioned> {
+    let mut result = Vec::with_capacity(areas.len());
+    let mut remaining: Vec<f64> = areas.to_vec();
+    remaining.sort_by(|a, b| b.partial_cmp(a).unwrap()); // descending
+
+    while !remaining.is_empty() {
+        let horizontal = w >= h;
+        let short = if horizontal { h } else { w };
+
+        // Find best row length
+        let mut best_score = f64::INFINITY;
+        let mut best_k = 1;
+        let mut row_sum = 0.0;
+
+        for k in 1..=remaining.len().min(20) { // cap for speed
+            let sum: f64 = remaining[0..k].iter().sum();
+            let score = worst_aspect_ratio(&remaining[0..k], sum, short);
+            if score < best_score {
+                best_score = score;
+                best_k = k;
+                row_sum = sum;
+            } else if k > 3 {
+                break; // diminishing returns
+            }
+        }
+
+        let row = &remaining[0..best_k];
+        let thickness = row_sum / short.max(1e-8);
+
+        let mut offset = 0.0;
+        for &area in row {
+            let length = area / thickness.max(1e-8);
+            let pos = if horizontal {
+                Positioned {
+                    x: x + offset,
+                    y,
+                    w: length,
+                    h: thickness,
+                }
+            } else {
+                Positioned {
+                    x,
+                    y: y + offset,
+                    w: thickness,
+                    h: length,
+                }
+            };
+            result.push(pos);
+            offset += length;
+        }
+
+        // Shrink remaining space
+        if horizontal {
+            y += thickness;
+            h -= thickness;
+        } else {
+            x += thickness;
+            w -= thickness;
+        }
+
+        remaining.drain(0..best_k);
+    }
+
+    result
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Positioned {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+fn worst_aspect_ratio(row: &[f64], sum: f64, side: f64) -> f64 {
+    if row.is_empty() || sum <= 0.0 || side <= 0.0 {
+        return f64::MAX;
+    }
+    let side_sq = side * side;
+    let sum_sq = sum * sum;
+    let max_r = row.iter().copied().fold(0.0, f64::max);
+    let min_r = row.iter().copied().fold(f64::INFINITY, f64::min);
+    let a = (side_sq * max_r) / sum_sq;
+    let b = sum_sq / (side_sq * min_r);
+    a.max(b)
+}

@@ -1,0 +1,75 @@
+use vello::kurbo::Affine;
+use vello::peniko::Fill;
+use vello::Scene;
+
+use super::colors;
+use super::cushion::{self, CushionConfig};
+use crate::layout::LayoutRect;
+use crate::tree::arena::FileTree;
+use crate::tree::extensions::categorize_extension;
+
+/// Build a Vello scene from the treemap layout.
+pub fn build_scene(
+    scene: &mut Scene,
+    tree: &FileTree,
+    layout_rects: &[LayoutRect],
+    cushion_config: &CushionConfig,
+    hover_node: Option<crate::tree::arena::NodeId>,
+) {
+    scene.reset();
+
+    let mut files_rendered = 0;
+    let mut dirs_rendered = 0;
+
+    for rect in layout_rects {
+        let node = tree.get(rect.node);
+
+        // For now, render EVERYTHING including directories
+        // This gives us a bare-bones treemap showing all data
+        // Later we can refine to only show files when they're visible
+
+        // Choose color: gray for directories, colored for files
+        let base_color = if node.is_dir {
+            // Gray for directories
+            colors::AppColor::new(0.3, 0.3, 0.3)
+        } else {
+            // Get color based on file extension
+            let ext = if node.extension_id > 0 {
+                tree.extensions
+                    .get(node.extension_id as usize)
+                    .map(|s| s.as_str())
+                    .unwrap_or("")
+            } else {
+                ""
+            };
+            colors::extension_color(ext)
+        };
+
+        // Highlight hovered node
+        let base_color = if hover_node == Some(rect.node) {
+            base_color.lighten(0.2)
+        } else {
+            base_color
+        };
+
+        // Generate cushion gradient for this rectangle
+        let brush = cushion::cushion_gradient(rect, base_color, cushion_config);
+        let shape = cushion::layout_to_rect(rect);
+
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &shape);
+
+        if node.is_dir {
+            dirs_rendered += 1;
+        } else {
+            files_rendered += 1;
+        }
+    }
+
+    tracing::info!(
+        "Scene built: {} files + {} dirs = {} total rectangles rendered (from {} layout rects)",
+        files_rendered,
+        dirs_rendered,
+        files_rendered + dirs_rendered,
+        layout_rects.len()
+    );
+}

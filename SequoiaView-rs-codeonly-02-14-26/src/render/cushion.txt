@@ -1,0 +1,85 @@
+use super::colors::AppColor;
+use crate::layout::LayoutRect;
+use vello::kurbo::{Point, Rect};
+use vello::peniko::{self, ColorStop, Gradient};
+
+/// Cushion shading parameters.
+pub struct CushionConfig {
+    /// How much the cushion "puffs up" (0.0 = flat, 1.0 = very curved)
+    pub height: f32,
+    /// How much each nesting level reduces the cushion height
+    pub depth_falloff: f32,
+    /// Light direction (normalized). Default: top-left illumination.
+    pub light_x: f32,
+    pub light_y: f32,
+}
+
+impl Default for CushionConfig {
+    fn default() -> Self {
+        Self {
+            height: 0.6,
+            depth_falloff: 0.85,
+            light_x: -0.5,
+            light_y: -0.7,
+        }
+    }
+}
+
+/// Generate a gradient brush that approximates cushion shading for a rectangle.
+///
+/// Uses a two-point radial gradient to simulate the parabolic surface illumination.
+/// The highlight is offset from center based on the light direction, creating a
+/// 3D "pillow" effect.
+pub fn cushion_gradient(
+    rect: &LayoutRect,
+    base_color: AppColor,
+    config: &CushionConfig,
+) -> peniko::Brush {
+    // Reduce cushion intensity at deeper nesting levels
+    let depth_factor = config.depth_falloff.powi(rect.depth as i32);
+    let intensity = config.height * depth_factor;
+
+    // Highlight and shadow colors
+    let highlight = base_color.lighten(intensity * 0.45);
+    let shadow = base_color.darken(intensity * 0.35);
+
+    // Center of the rectangle, offset toward the light source
+    let cx = rect.x as f64 + rect.w as f64 * (0.5 + config.light_x as f64 * 0.2);
+    let cy = rect.y as f64 + rect.h as f64 * (0.5 + config.light_y as f64 * 0.2);
+
+    // Gradient radius covers the rectangle diagonal
+    let radius = ((rect.w as f64).powi(2) + (rect.h as f64).powi(2)).sqrt() * 0.6;
+
+    let gradient = Gradient::new_two_point_radial(
+        Point::new(cx, cy),
+        0.0,
+        Point::new(cx, cy),
+        radius as f32,
+    )
+    .with_stops([
+        ColorStop {
+            offset: 0.0,
+            color: highlight.to_dynamic(),
+        },
+        ColorStop {
+            offset: 0.5,
+            color: base_color.to_dynamic(),
+        },
+        ColorStop {
+            offset: 1.0,
+            color: shadow.to_dynamic(),
+        },
+    ]);
+
+    peniko::Brush::Gradient(gradient)
+}
+
+/// Get the bounding rect for a layout rect (as a vello kurbo Rect).
+pub fn layout_to_rect(rect: &LayoutRect) -> Rect {
+    Rect::new(
+        rect.x as f64,
+        rect.y as f64,
+        (rect.x + rect.w) as f64,
+        (rect.y + rect.h) as f64,
+    )
+}
