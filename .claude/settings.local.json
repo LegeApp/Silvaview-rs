@@ -2,7 +2,7 @@
   "permissions": {
     "allow": [
       "Bash(cargo build:*)",
-      "Bash(RUST_LOG=sequoiaview_rs=debug cargo run:*)",
+      "Bash(RUST_LOG=Silvaview_rs=debug cargo run:*)",
       "Bash(cargo run:*)",
       "WebSearch",
       "WebFetch(domain:docs.rs)",

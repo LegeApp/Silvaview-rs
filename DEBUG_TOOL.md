@@ -48,7 +48,7 @@ target\release\debug-scan.exe C:\
 
 ```
 ═══════════════════════════════════════════════════════
-  SequoiaView-rs Debug Scanner
+  SilvaView-rs Debug Scanner
 ═══════════════════════════════════════════════════════
 
 Scan path: C:\

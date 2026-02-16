@@ -45,7 +45,7 @@ File: `src/render/scene.rs`
 
 - `cargo.exe check -q` passes.
 - `cargo.exe test -q layout::squarify::tests -- --nocapture` passes.
-- `cargo.exe run -q --bin debug-layout -- "D:\\Rust-projects\\SequoiaView-rs"` confirms:
+- `cargo.exe run -q --bin debug-layout -- "D:\\Rust-projects\\SilvaView-rs"` confirms:
   - LOD truncation is active with explicit coverage logs.
   - Layout generation remains stable.
   - Label candidates are present.
@@ -60,7 +60,7 @@ Files: `src/render/scene.rs`, `src/app.rs`, `src/main.rs`, `src/ui/input.rs`
   - Clicking treemap squares does nothing (reserved for future file-inspection behavior).
 - Hover no longer suppresses label drawing, so labels remain clickable.
 - Window title now updates to current navigation path (for clear landing context), e.g.:
-  - `SequoiaView-rs — C:\Users\...`
+  - `SilvaView-rs — C:\Users\...`
 
 ## 5) Framed directory nesting model (parent/child readability)
 
@@ -76,3 +76,25 @@ Files: `src/layout/squarify.rs`, `src/render/scene.rs`
   - subtle top header band
   - thin border strips around directory bounds
 - Labels are now anchored to directory header bands (matching the new visual hierarchy).
+
+## 6) Temporary Iced settings page (not startup, not path control)
+
+Files: `Cargo.toml`, `src/ui/config_dialog.rs`, `src/ui/mod.rs`, `src/main.rs`
+
+- Added `iced` and `rfd` dependencies for a temporary settings page.
+- Kept the core app/event/render loop winit-based.
+- `F2` opens settings-only dialog (no startup gating, no drive/path control).
+- Settings page updates:
+  - treemap layout parameters (`min_area`, `min_side`, `recurse_min_side`, frame/header sizes)
+  - cushion shading parameters (`ambient`, `diffuse`)
+  - label visibility toggle
+
+## 7) Vello path entry overlay for scan control
+
+Files: `src/ui/overlay.rs`, `src/app.rs`, `src/main.rs`
+
+- Added top-center GPU-rendered path bar (`render_path_bar`) in Vello scene.
+- Default text starts at current scan path (`C:\` by default).
+- Hover/click same area to edit path.
+- Press `Enter` to start/rescan using typed path.
+- Added drive normalization so `C:` is treated as `C:\`.

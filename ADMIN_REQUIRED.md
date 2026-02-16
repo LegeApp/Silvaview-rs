@@ -2,7 +2,7 @@
 
 ## Problem Summary
 
-When you ran `sequoiaview-rs.exe "C:\"`, the scanner returned **0 entries**, resulting in:
+When you ran `Silvaview-rs.exe "C:\"`, the scanner returned **0 entries**, resulting in:
 - An empty tree (1 node = just the root)
 - A blank gray visualization
 - No meaningful data
@@ -21,8 +21,8 @@ The **MFT (Master File Table) scanner** requires **Administrator privileges** to
 **PowerShell:**
 ```powershell
 # Right-click PowerShell → "Run as Administrator", then:
-cd D:\Rust-projects\SequoiaView-rs
-.\target\release\sequoiaview-rs.exe "C:\"
+cd D:\Rust-projects\SilvaView-rs
+.\target\release\Silvaview-rs.exe "C:\"
 ```
 
 **Or use the helper script:**
@@ -34,8 +34,8 @@ cd D:\Rust-projects\SequoiaView-rs
 
 ```bash
 # Scan your user directories or other drives
-.\target\release\sequoiaview-rs.exe "D:\Rust-projects"
-.\target\release\sequoiaview-rs.exe "C:\Users\YourName\Documents"
+.\target\release\Silvaview-rs.exe "D:\Rust-projects"
+.\target\release\Silvaview-rs.exe "C:\Users\YourName\Documents"
 ```
 
 This works immediately without elevation and scans fine!
@@ -79,11 +79,11 @@ ERROR Scan returned no files! Possible causes:
 
 ```bash
 # Works immediately (no admin needed):
-.\target\release\sequoiaview-rs.exe "D:\Rust-projects"
+.\target\release\Silvaview-rs.exe "D:\Rust-projects"
 
 # Requires admin:
 # Right-click PowerShell → Run as Administrator, then:
-.\target\release\sequoiaview-rs.exe "C:\"
+.\target\release\Silvaview-rs.exe "C:\"
 ```
 
 You should now see a **bright, colorful cushion treemap** with proper hierarchical shading!

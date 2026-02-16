@@ -1,5 +1,5 @@
-$outputFile = "D:\Rust-projects\SequoiaView-rs\scan-results.txt"
-$exe = "D:\Rust-projects\SequoiaView-rs\target\release\debug-scan.exe"
+$outputFile = "D:\Rust-projects\SilvaView-rs\scan-results.txt"
+$exe = "D:\Rust-projects\SilvaView-rs\target\release\debug-scan.exe"
 $args = "C:\"
 
 # Run elevated and redirect output to file

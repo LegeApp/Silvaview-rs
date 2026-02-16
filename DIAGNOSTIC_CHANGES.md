@@ -34,10 +34,10 @@ Added logging at key points to help debug:
 
 ```powershell
 # Set logging environment variable
-$env:RUST_LOG = "sequoiaview_rs=info"
+$env:RUST_LOG = "Silvaview_rs=info"
 
 # Run the app (must be elevated for MFT scanning)
-.\target\release\sequoiaview-rs.exe C:\
+.\target\release\Silvaview-rs.exe C:\
 ```
 
 Watch the console output. You should see:
@@ -93,6 +93,6 @@ Once you verify the full treemap is displaying:
 
 ## Diagnostic Log Levels
 
-- `RUST_LOG=sequoiaview_rs=info` - Shows major steps (recommended)
-- `RUST_LOG=sequoiaview_rs=debug` - Shows detailed layout info
-- `RUST_LOG=sequoiaview_rs=trace` - Shows everything (very verbose)
+- `RUST_LOG=Silvaview_rs=info` - Shows major steps (recommended)
+- `RUST_LOG=Silvaview_rs=debug` - Shows detailed layout info
+- `RUST_LOG=Silvaview_rs=trace` - Shows everything (very verbose)

@@ -12,6 +12,7 @@ use anyhow::Result;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use app::App;
@@ -19,13 +20,13 @@ use render::RenderState;
 use ui::input;
 
 /// Main application handler for winit's event loop.
-struct SequoiaViewApp {
+struct SilvaViewApp {
     app: App,
     render_state: Option<RenderState>,
     window: Option<Arc<Window>>,
 }
 
-impl SequoiaViewApp {
+impl SilvaViewApp {
     fn new(scan_path: PathBuf) -> Self {
         Self {
             app: App::new(scan_path),
@@ -40,21 +41,21 @@ impl SequoiaViewApp {
         };
         if let (Some(tree), Some(nav)) = (&self.app.tree, &self.app.navigation) {
             let path = ui::tooltip::build_path(tree, nav.current_root);
-            window.set_title(&format!("SequoiaView-rs — {}", path));
+            window.set_title(&format!("SilvaView-rs — {}", path));
         } else {
-            window.set_title("SequoiaView-rs — Disk Space Visualizer");
+            window.set_title("SilvaView-rs — Disk Space Visualizer");
         }
     }
 }
 
-impl ApplicationHandler for SequoiaViewApp {
+impl ApplicationHandler for SilvaViewApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
 
         let attrs = WindowAttributes::default()
-            .with_title("SequoiaView-rs — Disk Space Visualizer")
+            .with_title("SilvaView-rs — Disk Space Visualizer")
             .with_inner_size(winit::dpi::LogicalSize::new(1280, 800));
 
         let window = Arc::new(
@@ -72,9 +73,7 @@ impl ApplicationHandler for SequoiaViewApp {
                 self.app.viewport_width = size.width as f32;
                 self.app.viewport_height = size.height as f32;
                 self.render_state = Some(state);
-
-                // Start scanning immediately
-                self.app.start_scan();
+                window.request_redraw();
             }
             Err(e) => {
                 tracing::error!("Failed to initialize GPU: {}", e);
@@ -100,6 +99,18 @@ impl ApplicationHandler for SequoiaViewApp {
                 self.app.mouse.x = position.x as f32;
                 self.app.mouse.y = position.y as f32;
 
+                let [x1, y1, x2, y2] = self.app.path_bar_bounds();
+                let hovered = self.app.mouse.x >= x1
+                    && self.app.mouse.x <= x2
+                    && self.app.mouse.y >= y1
+                    && self.app.mouse.y <= y2;
+                if hovered != self.app.path_bar_hovered {
+                    self.app.path_bar_hovered = hovered;
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+
                 // Update hover state
                 let new_hover = if let Some(layout) = &self.app.layout {
                     input::hit_test(
@@ -120,6 +131,16 @@ impl ApplicationHandler for SequoiaViewApp {
 
             WindowEvent::MouseInput { state, button, .. } => {
                 if state == ElementState::Pressed && button == winit::event::MouseButton::Left {
+                    if self.app.path_bar_hovered {
+                        self.app.path_editing = true;
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                        return;
+                    } else {
+                        self.app.path_editing = false;
+                    }
+
                     // Navigation is intentionally label-only: clicking data blocks is reserved
                     // for future file inspection interactions.
                     if let Some(node) = self.app.hit_test_label(self.app.mouse.x, self.app.mouse.y) {
@@ -147,6 +168,84 @@ impl ApplicationHandler for SequoiaViewApp {
 
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
+                    if !self.app.path_editing
+                        && self.app.path_bar_hovered
+                        && matches!(event.logical_key.as_ref(), Key::Character(_))
+                    {
+                        self.app.path_editing = true;
+                    }
+
+                    if self.app.path_editing {
+                        match event.logical_key.as_ref() {
+                            Key::Named(NamedKey::Enter) => {
+                                let path_text = self.app.path_input.trim();
+                                if !path_text.is_empty() {
+                                    self.app.start_scan_path(normalize_scan_path(path_text));
+                                    self.app.path_editing = false;
+                                    if let Some(window) = &self.window {
+                                        window.request_redraw();
+                                    }
+                                }
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                self.app.path_input.pop();
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                                return;
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                self.app.path_editing = false;
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                                return;
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                self.app.path_input.push(' ');
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                                return;
+                            }
+                            Key::Character(chars) => {
+                                let text = chars.to_string();
+                                if !text.chars().any(|c| c.is_control()) {
+                                    self.app.path_input.push_str(&text);
+                                    if let Some(window) = &self.window {
+                                        window.request_redraw();
+                                    }
+                                }
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if matches!(event.logical_key.as_ref(), Key::Named(NamedKey::F2)) {
+                        let settings = ui::config_dialog::run_config_dialog(
+                            "SilvaView-rs — Settings",
+                            ui::config_dialog::DialogResult {
+                                scan_path: self.app.scan_path.clone(),
+                                layout: self.app.layout_config.clone(),
+                                cushion: self.app.cushion_config,
+                                show_labels: self.app.show_text_labels,
+                            },
+                            false,
+                        );
+                        if let Some(settings) = settings {
+                            self.app.layout_config = settings.layout;
+                            self.app.cushion_config = settings.cushion;
+                            self.app.show_text_labels = settings.show_labels;
+                            self.app.needs_relayout = true;
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+
                     let action = input::process_key(event.logical_key.clone(), event.state);
                     self.handle_action(action);
                 }
@@ -187,7 +286,7 @@ impl ApplicationHandler for SequoiaViewApp {
     }
 }
 
-impl SequoiaViewApp {
+impl SilvaViewApp {
     fn handle_action(&mut self, action: input::InputAction) {
         match action {
             input::InputAction::DrillDown { node } => {
@@ -215,13 +314,29 @@ impl SequoiaViewApp {
     }
 }
 
+fn normalize_scan_path(text: &str) -> PathBuf {
+    let trimmed = text.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return PathBuf::from(format!("{}\\", trimmed));
+    }
+    if bytes.len() == 3
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+        && bytes[0].is_ascii_alphabetic()
+    {
+        return PathBuf::from(format!("{}\\", &trimmed[..2]));
+    }
+    PathBuf::from(trimmed)
+}
+
 fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("sequoiaview_rs=info".parse().unwrap()),
+                .add_directive("Silvaview_rs=info".parse().unwrap()),
         )
         .init();
 
@@ -244,12 +359,12 @@ fn main() -> Result<()> {
         }
     }
 
-    tracing::info!("SequoiaView-rs starting, scan path: {:?}", scan_path);
+    tracing::info!("SilvaView-rs starting, scan path: {:?}", scan_path);
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = SequoiaViewApp::new(scan_path);
+    let mut app = SilvaViewApp::new(scan_path);
     event_loop.run_app(&mut app)?;
 
     Ok(())

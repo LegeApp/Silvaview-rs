@@ -50,6 +50,9 @@ pub struct App {
     pub show_analytics_panel: bool,
     pub show_text_labels: bool,
     pub label_hit_regions: Vec<LabelHitRegion>,
+    pub path_input: String,
+    pub path_editing: bool,
+    pub path_bar_hovered: bool,
 
     // Rendering
     pub scene: Scene,
@@ -72,7 +75,7 @@ impl App {
 
         Self {
             phase: AppPhase::WaitingForPath,
-            scan_path,
+            scan_path: scan_path.clone(),
             scan_rx: None,
             scan_progress: None,
             tree: None,
@@ -87,6 +90,9 @@ impl App {
             show_analytics_panel: false,  // Keep analytics panel off by default
             show_text_labels: true,       // Enable constrained labels for orientation
             label_hit_regions: Vec::new(),
+            path_input: scan_path.to_string_lossy().to_string(),
+            path_editing: false,
+            path_bar_hovered: false,
             scene: Scene::new(),
             needs_relayout: true,
             viewport_width: 800.0,
@@ -131,6 +137,21 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Start scanning a new path (resets current tree/layout state).
+    pub fn start_scan_path(&mut self, path: PathBuf) {
+        self.scan_path = path.clone();
+        self.path_input = path.to_string_lossy().to_string();
+        self.tree = None;
+        self.layout = None;
+        self.navigation = None;
+        self.hover_node = None;
+        self.cached_treemap_image = None;
+        self.label_hit_regions.clear();
+        self.scan_progress = None;
+        self.needs_relayout = true;
+        self.start_scan();
     }
 
     /// Poll for scan completion. Call this from the event loop.
@@ -263,8 +284,18 @@ impl App {
             //     );
             // }
         } else {
+            self.scene.reset();
             self.label_hit_regions.clear();
         }
+
+        crate::ui::overlay::render_path_bar(
+            &mut self.scene,
+            &mut self.text_renderer,
+            &self.path_input,
+            self.path_bar_hovered,
+            self.path_editing,
+            self.viewport_width,
+        );
     }
 
     /// Hit-test interactive folder labels (used for label-only drill-down).
@@ -276,6 +307,10 @@ impl App {
             }
         }
         None
+    }
+
+    pub fn path_bar_bounds(&self) -> [f32; 4] {
+        crate::ui::overlay::path_bar_bounds(self.viewport_width)
     }
 
     /// Handle viewport resize.

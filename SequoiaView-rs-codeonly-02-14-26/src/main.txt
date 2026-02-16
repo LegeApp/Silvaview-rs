@@ -19,13 +19,13 @@ use render::RenderState;
 use ui::input;
 
 /// Main application handler for winit's event loop.
-struct SequoiaViewApp {
+struct SilvaViewApp {
     app: App,
     render_state: Option<RenderState>,
     window: Option<Arc<Window>>,
 }
 
-impl SequoiaViewApp {
+impl SilvaViewApp {
     fn new(scan_path: PathBuf) -> Self {
         Self {
             app: App::new(scan_path),
@@ -35,14 +35,14 @@ impl SequoiaViewApp {
     }
 }
 
-impl ApplicationHandler for SequoiaViewApp {
+impl ApplicationHandler for SilvaViewApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
 
         let attrs = WindowAttributes::default()
-            .with_title("SequoiaView-rs — Disk Space Visualizer")
+            .with_title("SilvaView-rs — Disk Space Visualizer")
             .with_inner_size(winit::dpi::LogicalSize::new(1280, 800));
 
         let window = Arc::new(
@@ -160,7 +160,7 @@ impl ApplicationHandler for SequoiaViewApp {
     }
 }
 
-impl SequoiaViewApp {
+impl SilvaViewApp {
     fn handle_action(&mut self, action: input::InputAction) {
         match action {
             input::InputAction::DrillDown { node } => {
@@ -191,7 +191,7 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("sequoiaview_rs=info".parse().unwrap()),
+                .add_directive("Silvaview_rs=info".parse().unwrap()),
         )
         .init();
 
@@ -214,12 +214,12 @@ fn main() -> Result<()> {
         }
     }
 
-    tracing::info!("SequoiaView-rs starting, scan path: {:?}", scan_path);
+    tracing::info!("SilvaView-rs starting, scan path: {:?}", scan_path);
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = SequoiaViewApp::new(scan_path);
+    let mut app = SilvaViewApp::new(scan_path);
     event_loop.run_app(&mut app)?;
 
     Ok(())

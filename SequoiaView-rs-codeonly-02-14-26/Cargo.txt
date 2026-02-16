@@ -1,11 +1,11 @@
 [package]
-name = "sequoiaview-rs"
+name = "Silvaview-rs"
 version = "0.1.0"
 edition = "2021"
 description = "Modern GPU-accelerated disk space visualizer using cushion treemaps"
 
 [[bin]]
-name = "sequoiaview-rs"
+name = "Silvaview-rs"
 path = "src/main.rs"
 
 [[bin]]
