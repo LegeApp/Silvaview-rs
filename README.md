@@ -4,7 +4,7 @@ A modern, GPU-accelerated disk space visualizer for Windows using cushion treema
 
 ## Features
 
-### ✅ **Implemented (Phase 1)**
+### ✅ **Implemented (Phase 1 Complete)**
 - **Fast filesystem scanning** via `jwalk` (parallel directory walker)
   - Scans millions of files in ~30-60 seconds
   - Auto-fallback when admin privileges unavailable
@@ -12,33 +12,41 @@ A modern, GPU-accelerated disk space visualizer for Windows using cushion treema
   - Optimized aspect ratios for easy visual comparison
   - LOD (level-of-detail) culling for performance
 - **GPU-accelerated rendering** via Vello (WebGPU)
-  - Radial gradient cushion shading (approximation)
-  - 60fps interactive rendering
+  - Radial gradient cushion shading with configurable parameters
+  - Directory frames and headers for visual hierarchy
+  - 60fps interactive rendering with smooth navigation
 - **File type categorization**
   - 12 categories: Image, Video, Audio, Document, Archive, Code, Executable, Config, Font, Database, DiskImage, Other
   - Vibrant dark-mode color palette
 - **Interactive navigation**
-  - Click to drill down into directories
+  - Click folder labels to drill down into directories
   - Right-click / Backspace to navigate up
-  - Hover for file info
-- **Analytics panel** (Phase 2 stub)
+  - Hover for file info tooltips
+  - Path bar overlay for custom scan locations
+  - Window title updates with current path
+- **Analytics panel**
   - Real-time space breakdown by file type
   - Visual bar chart representation
+  - Interactive configuration dialog (F2)
 
-### 🚧 **In Progress (Phase 2)**
-- **True per-pixel cushion shader** (WGSL)
-  - Parabolic surface normals
-  - Lambertian diffuse lighting
-  - Adjustable light direction
+### ✅ **Completed (Phase 2)**
+- **Advanced treemap features**
+  - Directory frame rendering with headers
+  - LOD-based child truncation for performance
+  - Single-child directory chain compression
+  - Coverage-based scaling to fill parent areas
 - **MFT direct parsing** for instant NTFS scans (~3-5s for full C: drive)
   - Requires Administrator privileges
-  - Currently stubbed (falls back to jwalk)
+  - Auto-detection with jwalk fallback
+  - Full MFT record parsing with hierarchy reconstruction
 - **Text rendering** for UI overlays
+  - Folder labels with size information
   - Tooltips with file details
-  - Breadcrumb navigation
-  - Analytics labels
+  - Cross-platform font loading (Windows/WSL/Linux)
+  - Path input overlay for custom scans
 
 ### 🔮 **Planned (Future)**
+- True per-pixel cushion shader (WGSL implementation)
 - USN Journal live updates (animated treemap changes)
 - Multi-drive support with tabbed interface
 - Export / save session
@@ -165,23 +173,23 @@ cargo run --release -- "D:\MyFolder"
 
 ---
 
-## Comparison: SilvaView (2006) vs SilvaView-rs (2026)
+## Comparison: SequoiaView (2006) vs SilvaView-rs (2026)
 
 | Feature | Original (2006) | SilvaView-rs (2026) |
 |---------|-----------------|----------------------|
 | **Scan Method** | Windows FS APIs (~5-10 min) | MFT direct (~3-5s) + jwalk fallback |
 | **Rendering** | GDI+ CPU rasterization | Vello GPU compute shaders |
-| **Cushion Shading** | Parabolic gradients | Phase 1: Radial gradients<br>Phase 2: True WGSL shader |
+| **Cushion Shading** | Parabolic gradients | Radial gradients with configurable parameters<br>Directory frames & headers |
 | **File Tree** | Pointer-heavy | Flat arena (cache-friendly) |
-| **Interaction** | Click to drill | Click drill + hover tooltips + analytics |
-| **Performance** | ~10fps on large drives | 60fps sustained |
+| **Interaction** | Click to drill | Label-only drill down + hover tooltips + path overlay + settings |
+| **UI Features** | Basic tooltips | Text overlays, analytics panel, configuration dialog, path input |
 
 ---
 
 ## Roadmap
 
 - **Phase 1** ✅ — Core treemap + GPU rendering
-- **Phase 2** 🚧 — MFT scanning + true cushion shader + text UI
+- **Phase 2** ✅ — MFT scanning + advanced treemap features + text UI
 - **Phase 3** 🔮 — Live updates, multi-drive, search, themes
 
 ---
