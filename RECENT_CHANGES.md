@@ -1,61 +1,78 @@
 # Recent Changes (2026-02-16)
 
-This document summarizes the latest troubleshooting and implementation changes made to the treemap pipeline.
+This update focused on three persistent issues: stripe-heavy layout, empty-looking folder interiors, and missing text overlays.
 
-## 1) Squarify layout bug fixed
-
-File: `src/layout/squarify.rs`
-
-- Fixed a core geometry error in the squarify algorithm where row `thickness` was computed from the short side of the remaining rectangle.
-- This caused width/height inversion in some cases (for example, `1080x1920` inside a `1920x1080` viewport), which then collapsed remaining layout space and skipped many nodes.
-- The fix computes thickness from the correct long side:
-  - Horizontal row: divide by `w`
-  - Vertical column: divide by `h`
-- Degenerate remaining-space logging was reduced to avoid warning spam.
-
-## 2) Squarify regression tests added
+## 1) Treemap LOD + chain compression improvements
 
 File: `src/layout/squarify.rs`
 
-Added unit tests:
+- Added coverage-based child truncation:
+  - New config: `child_coverage_target` (default `0.995`)
+  - New config: `max_children_per_dir` (default `1200`)
+- Kept children are re-scaled to fill parent area. This avoids large dark/blank-looking interior regions caused by dropping tiny tails after layout.
+- Added strict single-child directory chain compression (`collapse_single_dir_chain`) so repeated full-rectangle nesting is collapsed before recursion.
+- Applied chain compression in dominant-child fast path as well.
+- Recursion still respects `recurse_min_side` to avoid pathological micro-recursion.
 
-- `single_item_fills_viewport_without_axis_swap`
-- `layout_preserves_area_for_simple_case`
+## 2) Cross-platform text font loading fix
 
-These guard against future regressions in dimension orientation and area preservation.
+File: `src/render/text.rs`
 
-## 3) Label rendering de-cluttered and made legible
+- Replaced single hardcoded font path with fallback search across:
+  - `%WINDIR%\\Fonts\\segoeui.ttf`
+  - `C:\\Windows\\Fonts\\segoeui.ttf`
+  - `/mnt/c/Windows/Fonts/segoeui.ttf` (WSL)
+  - common Linux DejaVu paths
+- Added startup logging for the exact loaded font path.
+- `render_text()` now actually applies `max_width` via `LayoutSettings` and returns `None` for empty glyph output.
+
+## 3) Folder overlays tuned for visibility and behavior
 
 File: `src/render/scene.rs`
 
-Label rendering was reworked to reduce visual noise while preserving useful context:
+- Labels now target directories only and include folder size:
+  - `"<folder_name>  <formatted_size>"`
+- Label thresholds relaxed for visibility on real disk trees:
+  - lower minimum area
+  - reduced min width/height
+  - deeper max depth
+  - increased max labels
+- Overlays remain visible on hover so folder-name hit targets stay clickable.
+- Added debug metrics for label pipeline:
+  - `Text overlays: candidates=..., drawn=...`
 
-- Candidate filtering by area, rectangle dimensions, and depth
-- Sort by largest-first (prioritize the most important regions)
-- Hard cap on number of labels per frame
-- Overlap rejection (greedy placement)
-- Name truncation with ellipsis when needed
-- Semi-transparent background behind text for readability
+## Validation
 
-## 4) Non-GUI diagnostic alignment improved
+- `cargo.exe check -q` passes.
+- `cargo.exe test -q layout::squarify::tests -- --nocapture` passes.
+- `cargo.exe run -q --bin debug-layout -- "D:\\Rust-projects\\SequoiaView-rs"` confirms:
+  - LOD truncation is active with explicit coverage logs.
+  - Layout generation remains stable.
+  - Label candidates are present.
 
-File: `src/bin/debug-layout.rs`
+## 4) Navigation interaction refinement (label-only drill-down)
 
-- Updated label candidate counting to use the same thresholds as the production label heuristics.
-- This makes headless diagnostics better reflect what the GUI would show.
+Files: `src/render/scene.rs`, `src/app.rs`, `src/main.rs`, `src/ui/input.rs`
 
-## Validation summary
+- Scene now records clickable label hit regions for rendered folder overlays.
+- Left-click drill-down is now label-only:
+  - Clicking a folder name drills down one level.
+  - Clicking treemap squares does nothing (reserved for future file-inspection behavior).
+- Hover no longer suppresses label drawing, so labels remain clickable.
+- Window title now updates to current navigation path (for clear landing context), e.g.:
+  - `SequoiaView-rs — C:\Users\...`
 
-Using `debug-layout` on `D:\Rust-projects\SequoiaView-rs`:
+## 5) Framed directory nesting model (parent/child readability)
 
-- Before: ~25 layout rectangles, axis-swapped top rectangle observed, heavy "remaining space too small" warnings.
-- After: ~3209 layout rectangles, correct top-level rectangle orientation, dramatically improved node coverage and much lower label clutter.
+Files: `src/layout/squarify.rs`, `src/render/scene.rs`
 
-Test status:
-
-- `layout::squarify::tests` pass in release test run.
-
-## Notes
-
-- Full `C:\` scan diagnostics were started, but long-running processes can lock `debug-layout.exe` during rebuilds.
-- If needed, tuneable runtime label controls can be added next (`max_labels`, `label_depth`, `label_area_fraction`).
+- Added directory frame geometry in layout:
+  - New config: `dir_frame_px`
+  - New config: `dir_header_px`
+  - New config: `dir_frame_falloff`
+- Children are now laid out inside the parent's inset frame + header band.
+  - This makes subfolders visually nested within their folder instead of appearing as peer stripes.
+- Added render-side frame/header overlays for directories:
+  - subtle top header band
+  - thin border strips around directory bounds
+- Labels are now anchored to directory header bands (matching the new visual hierarchy).

@@ -71,3 +71,18 @@ pub fn extension_color(ext: &str) -> AppColor {
     let category = crate::tree::extensions::categorize_extension(ext);
     category_color(category)
 }
+
+/// Directory colors are intentionally muted but varied by name hash.
+/// This keeps hierarchy readable without making directories all identical gray.
+pub fn directory_color(name: &str, depth: u16) -> AppColor {
+    let mut h: u32 = 2166136261;
+    for &b in name.as_bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(16777619);
+    }
+    let r = 0.30 + (((h >> 0) & 0xFF) as f32 / 255.0) * 0.20;
+    let g = 0.30 + (((h >> 8) & 0xFF) as f32 / 255.0) * 0.20;
+    let b = 0.34 + (((h >> 16) & 0xFF) as f32 / 255.0) * 0.18;
+    let fade = (depth as f32 * 0.01).min(0.10);
+    AppColor::new((r - fade).max(0.20), (g - fade).max(0.20), (b - fade).max(0.22))
+}

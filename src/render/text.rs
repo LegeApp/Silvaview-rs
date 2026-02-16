@@ -1,7 +1,7 @@
-use fontdue::layout::{Layout, CoordinateSystem, GlyphRasterConfig, TextStyle};
+use fontdue::layout::{CoordinateSystem, GlyphRasterConfig, Layout, LayoutSettings, TextStyle};
 use fontdue::Font;
 use std::collections::HashMap;
-use std::hash::Hash;
+use std::path::PathBuf;
 
 pub struct TextRenderer {
     fonts: HashMap<String, Font>,
@@ -21,11 +21,35 @@ impl TextRenderer {
     }
 
     pub fn load_system_font(&mut self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
-        // Try to load a common system font
-        let font_data = std::fs::read("C:\\Windows\\Fonts\\segoeui.ttf")?;
-        let font = Font::from_bytes(font_data, fontdue::FontSettings::default())?;
-        self.fonts.insert(name.to_string(), font);
-        Ok(())
+        let mut candidates: Vec<PathBuf> = Vec::new();
+
+        if let Ok(windir) = std::env::var("WINDIR") {
+            candidates.push(PathBuf::from(format!("{windir}\\Fonts\\segoeui.ttf")));
+            candidates.push(PathBuf::from(format!("{windir}\\Fonts\\arial.ttf")));
+        }
+
+        // Native Windows paths
+        candidates.push(PathBuf::from("C:\\Windows\\Fonts\\segoeui.ttf"));
+        candidates.push(PathBuf::from("C:\\Windows\\Fonts\\arial.ttf"));
+
+        // WSL/Linux fallback paths (for Linux builds scanning Windows drives)
+        candidates.push(PathBuf::from("/mnt/c/Windows/Fonts/segoeui.ttf"));
+        candidates.push(PathBuf::from("/mnt/c/Windows/Fonts/arial.ttf"));
+        candidates.push(PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"));
+        candidates.push(PathBuf::from("/usr/share/fonts/TTF/DejaVuSans.ttf"));
+
+        for path in candidates {
+            let Ok(font_data) = std::fs::read(&path) else {
+                continue;
+            };
+            if let Ok(font) = Font::from_bytes(font_data, fontdue::FontSettings::default()) {
+                self.fonts.insert(name.to_string(), font);
+                tracing::info!("Loaded text font from {}", path.display());
+                return Ok(());
+            }
+        }
+
+        Err("unable to load a system font from known locations".into())
     }
 
     pub fn render_text(
@@ -36,9 +60,10 @@ impl TextRenderer {
         max_width: Option<f32>,
     ) -> Option<TextRenderResult> {
         let font = self.fonts.get(font_name)?;
-        
+
         // Reset layout
-        self.layout.reset(&fontdue::layout::LayoutSettings {
+        self.layout.reset(&LayoutSettings {
+            max_width,
             ..Default::default()
         });
 
@@ -84,6 +109,10 @@ impl TextRenderer {
             let bottom = glyph.y + metrics.height as f32;
             width = width.max(right);
             height = height.max(bottom);
+        }
+
+        if glyphs.is_empty() {
+            return None;
         }
 
         Some(TextRenderResult {
