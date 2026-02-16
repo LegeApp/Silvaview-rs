@@ -165,7 +165,7 @@ cargo run --release -- "D:\MyFolder"
 
 ---
 
-## Comparison: SilvaView (2006) vs SilvaView-rs (2026)
+## Comparison: SequoiaView (2006) vs SilvaView-rs (2026)
 
 | Feature | Original (2006) | SilvaView-rs (2026) |
 |---------|-----------------|----------------------|
