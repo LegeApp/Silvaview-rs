@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(RUST_LOG=sequoiaview_rs=debug cargo run:*)",
+      "Bash(cargo run:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:github.com)",
+      "Bash(./target/release/validate-backend.exe:*)"
+    ]
+  }
+}
