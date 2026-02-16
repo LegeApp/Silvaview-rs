@@ -36,7 +36,7 @@ show_text_labels: false,  // No text, pure cushion treemap
 
 ## Recommended Approach
 
-For the cleanest visualization matching the original SequoiaView:
+For the cleanest visualization matching the original SilvaView:
 - Keep text labels **disabled** (current default)
 - The cushion shading and colors alone should convey the hierarchy
 - File/folder names can appear in:

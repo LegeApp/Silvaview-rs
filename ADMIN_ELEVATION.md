@@ -1,18 +1,18 @@
 # Administrator Privilege Elevation
 
-SequoiaView-rs requires Administrator privileges for **fast MFT scanning** on NTFS drives.
+SilvaView-rs requires Administrator privileges for **fast MFT scanning** on NTFS drives.
 
 ## How It Works
 
 ### **Automatic UAC Prompt (Recommended)**
 
-We've configured the app with an embedded manifest (`sequoiaview-rs.exe.manifest`) that requests admin privileges. When you run the `.exe`, Windows will automatically show the UAC dialog:
+We've configured the app with an embedded manifest (`Silvaview-rs.exe.manifest`) that requests admin privileges. When you run the `.exe`, Windows will automatically show the UAC dialog:
 
 ```
 User Account Control
 Do you want to allow this app to make changes to your device?
 
-SequoiaView-rs
+SilvaView-rs
 Verified publisher: (Unsigned)
 
 [Yes] [No]
@@ -30,7 +30,7 @@ This is embedded at build time via `build.rs` using the `winres` crate.
 ## Build Configuration
 
 ### Files:
-1. **`sequoiaview-rs.exe.manifest`** — XML manifest requesting admin
+1. **`Silvaview-rs.exe.manifest`** — XML manifest requesting admin
 2. **`build.rs`** — Build script that embeds the manifest into the `.exe`
 3. **`Cargo.toml`** — Includes `winres` as a build dependency
 
@@ -39,7 +39,7 @@ This is embedded at build time via `build.rs` using the `winres` crate.
 cargo build --release
 ```
 
-The resulting `target/release/sequoiaview-rs.exe` will have the manifest embedded. Double-clicking it will trigger the UAC prompt.
+The resulting `target/release/Silvaview-rs.exe` will have the manifest embedded. Double-clicking it will trigger the UAC prompt.
 
 ---
 
@@ -75,16 +75,16 @@ INFO  For 10x faster scanning, run with 'Run as Administrator'
 If the user declines the UAC prompt or runs without elevation, they can manually re-run:
 
 **Windows GUI:**
-- Right-click `sequoiaview-rs.exe` → **Run as administrator**
+- Right-click `Silvaview-rs.exe` → **Run as administrator**
 
 **PowerShell:**
 ```powershell
-Start-Process sequoiaview-rs.exe -Verb RunAs
+Start-Process Silvaview-rs.exe -Verb RunAs
 ```
 
 **Command Prompt:**
 ```cmd
-runas /user:Administrator sequoiaview-rs.exe
+runas /user:Administrator Silvaview-rs.exe
 ```
 
 ---

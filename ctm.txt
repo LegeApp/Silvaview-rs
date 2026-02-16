@@ -107,7 +107,7 @@ where hi is the actual value of h at level i , and f a scale fac- tor between 0 
 Figure 5. Cushion treemap, h = 0.5, f = 1 
 
   For the shading of the geometry a simple model, i.e. dif- fuse reflection, suffices [5]. The normaln follows from:
-n = [1, 0,?z/? x ] × [0, 1,?z/? y]
+n = [1, 0,?z/? x ] ï¿½ [0, 1,?z/? y]
 
 mation of orthogonal ridges gives a cushion-like shape. Nu- merically, the simplest bump that can be used is a parabola, hence for each rectangle of the treemap we use a segment of a parabolic surface. The height z of such a surface is given
 
@@ -124,7 +124,7 @@ I = Ia
 
 + Is
 
-max(0, n·l
+max(0, nï¿½l
 |n||l|
 
 )	(6)
@@ -146,7 +146,7 @@ a cushion treemap of the file system, and three cushion tree- maps of the organi
 
 where x1 and x2 are the bounds of the rectangle in the x - direction. The height of this ridge is 0 for x = x1 and x = x2, and equal to (x2-x1)h in the center (x1+x2)/2. The parameter h denotes the height proportional to the width, hence it controls only the shape of the ridge. The ridge ?z in (2) does not depend on y, the bump has the same shape at
 
-factor f . All images have a resolution of 640×480 pixels. If we compare these with the treemap versions, it is clear that the shading provides a strong cue for the hierarchical struc- ture: substructures can be identified effortlessly. With the scale factor f a continuous trade off between the visualiza- tion of global and detailed information can be made.
+factor f . All images have a resolution of 640ï¿½480 pixels. If we compare these with the treemap versions, it is clear that the shading provides a strong cue for the hierarchical struc- ture: substructures can be identified effortlessly. With the scale factor f a continuous trade off between the visualiza- tion of global and detailed information can be made.
 
 
 
@@ -223,9 +223,9 @@ This concludes the presentation of the complete algorithm. It shows that cushion
 4 
 Interaction
 
-  Presentation of hierarchical structures is only one aspect, for effective visualization of such structures interaction is equally important. We have embedded cushion treemaps in SEQUOIAVIEW, our interactive system for the analysis and visualization of large tree structures. The cushion treemaps are generated with a slightly extended version of the pre- vious algorithm. This takes less than a second on an SGI O2, even for larger images and trees. Upon each interaction the image is copied to the screen, annotation is overlaid, se- lected rectangles are colored by superimposing transparent rectangles. Various coloring options are available, to show the size, the level, and other attributes of the leaves. Regen- eration of the image is done only if the tree or one of the im- age parameters change.
+  Presentation of hierarchical structures is only one aspect, for effective visualization of such structures interaction is equally important. We have embedded cushion treemaps in SilvaVIEW, our interactive system for the analysis and visualization of large tree structures. The cushion treemaps are generated with a slightly extended version of the pre- vious algorithm. This takes less than a second on an SGI O2, even for larger images and trees. Upon each interaction the image is copied to the screen, annotation is overlaid, se- lected rectangles are colored by superimposing transparent rectangles. Various coloring options are available, to show the size, the level, and other attributes of the leaves. Regen- eration of the image is done only if the tree or one of the im- age parameters change.
   Many options are provided for navigation and selection. The user can click on rectangles, upon which the properties of the leaf are displayed in a separate window. The current node is highlighted with a red outline. The arrow keys can be used to select siblings (left, right), the parent (up) and the first child (down). The selected elements are continu- ously updated and highlighted, which enables fast and accu- rate navigation. Elements within a user-defined size range can be selected, and elements can be selected by matching their name with regular expressions. The user can zoom in on sub-trees, and zoom out again.
-  SEQUOIAVIEW has been used for various applications: file systems, tries, organization charts, lexical parse trees, and software structures. The cushion treemaps, supported by multiple options for navigation and selection, turned out to be highly effective.
+  SilvaVIEW has been used for various applications: file systems, tries, organization charts, lexical parse trees, and software structures. The cushion treemaps, supported by multiple options for navigation and selection, turned out to be highly effective.
 
 5 Discussion
 
@@ -247,7 +247,7 @@ Summarizing, still much work has to be done in the area of tree visualization.
    We have presented a new method to visualize hierarchical information. Cushion treemaps inherit the elegance of stan- dard treemaps, and add intuitive shading to provide insight in the hierarchical structure. Their features can be summa- rized as follows:
 - efficient: generation of an image typically takes less than a second;
 - effective: the structure is visualized much more effective compared with standard treemaps. This is obvious if we compare for instance figure 3 with figure 6;
-- compact: the display area is used very efficiently, more than 3000 leaves can be displayed easily in an image with 640×480 resolution. As a result, no scrolling or open- ing/closing of nodes is needed to view the whole struc- ture;
+- compact: the display area is used very efficiently, more than 3000 leaves can be displayed easily in an image with 640ï¿½480 resolution. As a result, no scrolling or open- ing/closing of nodes is needed to view the whole struc- ture;
 - easy to implement: the complete algorithm fits on one page;
 - easy to control: the appearance can be controlled with a few intuitive parameters, for which default values often suffice.
 Finally, cushion treemaps address one of the most important topics in visualization. Their wide applicability is probably what has struck us most during our research.

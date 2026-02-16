@@ -4,6 +4,7 @@ use crate::tree::arena::FileTree;
 use vello::kurbo::Rect;
 
 /// Cushion shading parameters (van Wijk & van de Wetering 1999).
+#[derive(Clone, Copy)]
 pub struct CushionConfig {
     /// Ambient light intensity (paper default: ~0.16 = 40/255)
     pub ambient: f32,

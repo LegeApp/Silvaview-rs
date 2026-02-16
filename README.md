@@ -1,4 +1,4 @@
-# SequoiaView-rs
+# SilvaView-rs
 
 A modern, GPU-accelerated disk space visualizer for Windows using cushion treemaps.
 
@@ -89,7 +89,7 @@ compact_str = "0.8"    # Small-string optimization
 ## Project Structure
 
 ```
-SequoiaView-rs/
+SilvaView-rs/
 ├── src/
 │   ├── scanner/           # Filesystem scanning (MFT + jwalk)
 │   ├── tree/              # Arena-based file tree (cache-friendly)
@@ -165,9 +165,9 @@ cargo run --release -- "D:\MyFolder"
 
 ---
 
-## Comparison: SequoiaView (2006) vs SequoiaView-rs (2026)
+## Comparison: SilvaView (2006) vs SilvaView-rs (2026)
 
-| Feature | Original (2006) | SequoiaView-rs (2026) |
+| Feature | Original (2006) | SilvaView-rs (2026) |
 |---------|-----------------|----------------------|
 | **Scan Method** | Windows FS APIs (~5-10 min) | MFT direct (~3-5s) + jwalk fallback |
 | **Rendering** | GDI+ CPU rasterization | Vello GPU compute shaders |
@@ -192,5 +192,5 @@ MIT (to be determined)
 
 ## Credits
 
-Inspired by **SequoiaView** (Jarke J. van Wijk, 2006)
+Inspired by **SilvaView** (Jarke J. van Wijk, 2006)
 Cushion Treemaps: "Cushion Treemaps: Visualization of Hierarchical Information" (van Wijk & van de Wetering, 1999)

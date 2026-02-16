@@ -112,7 +112,7 @@ All stages validated with dimension checks, finite number checks, and reasonable
 cargo build --release
 
 # Run main application
-./target/release/sequoiaview-rs.exe "C:\"
+./target/release/Silvaview-rs.exe "C:\"
 
 # Validate backend (no GUI required)
 ./target/release/validate-backend.exe "C:\"

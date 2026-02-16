@@ -3,7 +3,7 @@
   <assemblyIdentity
     version="1.0.0.0"
     processorArchitecture="*"
-    name="SequoiaView-rs"
+    name="SilvaView-rs"
     type="win32"
   />
   <description>Modern disk space visualizer using cushion treemaps</description>

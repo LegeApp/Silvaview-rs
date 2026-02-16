@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use vello::kurbo::{Affine, Rect};
-use vello::peniko::{Brush, Color, Fill};
+use vello::peniko::{Blob, Brush, Color, Fill, Image, ImageFormat};
 use vello::Scene;
 
+use crate::render::text::{TextGlyph, TextRenderResult, TextRenderer};
 use crate::tree::arena::{FileTree, NodeId};
 use crate::tree::extensions::FileCategory;
 use crate::ui::tooltip;
@@ -180,4 +183,102 @@ pub fn render_breadcrumb(
 
     // TODO: Render text path using parley
     // For Phase 2, we'll keep it simple without text initially
+}
+
+/// Shared top-center path bar bounds: [x1, y1, x2, y2].
+pub fn path_bar_bounds(viewport_width: f32) -> [f32; 4] {
+    let width = (viewport_width * 0.58).clamp(320.0, 860.0);
+    let height = 42.0;
+    let x = (viewport_width - width) * 0.5;
+    let y = 8.0;
+    [x, y, x + width, y + height]
+}
+
+pub fn render_path_bar(
+    scene: &mut Scene,
+    text_renderer: &mut TextRenderer,
+    path_text: &str,
+    is_hovered: bool,
+    is_editing: bool,
+    viewport_width: f32,
+) {
+    let [x1, y1, x2, y2] = path_bar_bounds(viewport_width);
+
+    let bg = if is_editing {
+        Color::new([0.22, 0.23, 0.25, 0.92])
+    } else if is_hovered {
+        Color::new([0.20, 0.21, 0.23, 0.90])
+    } else {
+        Color::new([0.17, 0.18, 0.20, 0.88])
+    };
+    let border = if is_editing {
+        Color::new([0.75, 0.80, 0.90, 0.75])
+    } else {
+        Color::new([0.60, 0.63, 0.70, 0.45])
+    };
+
+    let bar = Rect::new(x1 as f64, y1 as f64, x2 as f64, y2 as f64);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &bg, None, &bar);
+
+    // Border strips
+    let t = 1.0_f32;
+    let top = Rect::new(x1 as f64, y1 as f64, x2 as f64, (y1 + t) as f64);
+    let bottom = Rect::new(x1 as f64, (y2 - t) as f64, x2 as f64, y2 as f64);
+    let left = Rect::new(x1 as f64, y1 as f64, (x1 + t) as f64, y2 as f64);
+    let right = Rect::new((x2 - t) as f64, y1 as f64, x2 as f64, y2 as f64);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &border, None, &top);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &border, None, &bottom);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &border, None, &left);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &border, None, &right);
+
+    let pad_x = 12.0_f32;
+    let pad_y = 10.0_f32;
+    let content_w = (x2 - x1 - pad_x * 2.0).max(8.0);
+    let display_text = if path_text.trim().is_empty() { "C:\\" } else { path_text };
+    if let Some(rendered) = text_renderer.render_text(display_text, "default", 18.0, Some(content_w)) {
+        draw_text(scene, rendered, x1 + pad_x, y1 + pad_y);
+    }
+
+    if is_editing {
+        // Simple caret at end (fixed position approximation)
+        let approx_char_w = 10.0_f32;
+        let caret_x = (x1 + pad_x + (display_text.chars().count() as f32 * approx_char_w))
+            .min(x2 - 10.0);
+        let caret = Rect::new(
+            caret_x as f64,
+            (y1 + 9.0) as f64,
+            (caret_x + 1.5) as f64,
+            (y2 - 9.0) as f64,
+        );
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            &Color::new([0.90, 0.92, 0.98, 0.9]),
+            None,
+            &caret,
+        );
+    }
+}
+
+fn draw_text(scene: &mut Scene, text_result: TextRenderResult, x: f32, y: f32) {
+    for TextGlyph {
+        x: gx,
+        y: gy,
+        width,
+        height,
+        bitmap,
+    } in text_result.glyphs
+    {
+        if bitmap.is_empty() || width == 0 || height == 0 {
+            continue;
+        }
+        let image = Image::new(
+            Blob::new(Arc::new(bitmap)),
+            ImageFormat::Rgba8,
+            width as u32,
+            height as u32,
+        );
+        let transform = Affine::translate((x as f64 + gx as f64, y as f64 + gy as f64));
+        scene.draw_image(&image, transform);
+    }
 }

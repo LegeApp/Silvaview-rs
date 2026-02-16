@@ -1,4 +1,4 @@
-# SequoiaView-rs: Modern Disk Space Visualization
+# SilvaView-rs: Modern Disk Space Visualization
 
 ## Vision
 
@@ -149,7 +149,7 @@ for rect in visible_layout_rects {
 ## Project Structure
 
 ```
-SequoiaView-rs/
+SilvaView-rs/
 ├── Cargo.toml
 ├── PLAN.md                          # this file
 ├── src/

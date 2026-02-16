@@ -1,4 +1,4 @@
-// Public library interface for SequoiaView-rs
+// Public library interface for SilvaView-rs
 // This allows the debug CLI tool to use the core modules
 
 pub mod layout;
