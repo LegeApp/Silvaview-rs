@@ -33,6 +33,18 @@ impl SequoiaViewApp {
             window: None,
         }
     }
+
+    fn update_window_title(&self) {
+        let Some(window) = &self.window else {
+            return;
+        };
+        if let (Some(tree), Some(nav)) = (&self.app.tree, &self.app.navigation) {
+            let path = ui::tooltip::build_path(tree, nav.current_root);
+            window.set_title(&format!("SequoiaView-rs — {}", path));
+        } else {
+            window.set_title("SequoiaView-rs — Disk Space Visualizer");
+        }
+    }
 }
 
 impl ApplicationHandler for SequoiaViewApp {
@@ -107,6 +119,19 @@ impl ApplicationHandler for SequoiaViewApp {
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
+                if state == ElementState::Pressed && button == winit::event::MouseButton::Left {
+                    // Navigation is intentionally label-only: clicking data blocks is reserved
+                    // for future file inspection interactions.
+                    if let Some(node) = self.app.hit_test_label(self.app.mouse.x, self.app.mouse.y) {
+                        self.app.drill_down(node);
+                        self.update_window_title();
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
                 let action = if let Some(layout) = &self.app.layout {
                     input::process_mouse_button(
                         button,
@@ -130,7 +155,9 @@ impl ApplicationHandler for SequoiaViewApp {
             WindowEvent::RedrawRequested => {
                 // Poll for scan completion
                 if self.app.phase == app::AppPhase::Scanning {
-                    self.app.poll_scan();
+                    if self.app.poll_scan() {
+                        self.update_window_title();
+                    }
                 }
 
                 // Recompute layout if needed
@@ -165,12 +192,14 @@ impl SequoiaViewApp {
         match action {
             input::InputAction::DrillDown { node } => {
                 self.app.drill_down(node);
+                self.update_window_title();
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
             }
             input::InputAction::NavigateUp => {
                 self.app.navigate_up();
+                self.update_window_title();
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -189,6 +218,7 @@ impl SequoiaViewApp {
 fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
+        .with_ansi(false)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("sequoiaview_rs=info".parse().unwrap()),

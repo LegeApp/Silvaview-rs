@@ -42,8 +42,11 @@ pub fn rasterize_cushions(
     let h = height as usize;
     let mut buf = vec![0u8; w * h * 4];
 
-    // Initialize to black, fully opaque
+    // Initialize to dark neutral background, fully opaque.
     for pixel in buf.chunks_exact_mut(4) {
+        pixel[0] = 20;
+        pixel[1] = 22;
+        pixel[2] = 28;
         pixel[3] = 255;
     }
 
@@ -56,7 +59,7 @@ pub fn rasterize_cushions(
 
         // Base color
         let base = if node.is_dir {
-            colors::AppColor::new(0.5, 0.5, 0.55)  // Lighter gray-blue for directories
+            colors::directory_color(&node.name, rect.depth)
         } else {
             let ext = if node.extension_id > 0 {
                 tree.extensions

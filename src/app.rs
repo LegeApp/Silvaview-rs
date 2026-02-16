@@ -4,11 +4,10 @@ use std::sync::mpsc;
 use vello::peniko::Image;
 use vello::Scene;
 
-use crate::layout::{self, Layout, LayoutConfig, LayoutRect};
+use crate::layout::{self, Layout, LayoutConfig};
 use crate::render::cushion::{self, CushionConfig};
-use crate::render::scene::{self, build_scene, image_from_rgba};
+use crate::render::scene::{build_scene, image_from_rgba, LabelHitRegion};
 use crate::render::text::TextRenderer;
-use crate::render::RenderState;
 use crate::scanner;
 use crate::scanner::types::ScanProgress;
 use crate::tree::arena::{FileTree, NodeId};
@@ -50,6 +49,7 @@ pub struct App {
     pub analytics: Analytics,
     pub show_analytics_panel: bool,
     pub show_text_labels: bool,
+    pub label_hit_regions: Vec<LabelHitRegion>,
 
     // Rendering
     pub scene: Scene,
@@ -66,6 +66,8 @@ impl App {
         // Try to load a system font
         if let Err(_) = text_renderer.load_system_font("default") {
             tracing::warn!("Failed to load system font, text labels will not be available");
+        } else {
+            tracing::info!("Loaded default system font for text overlays");
         }
 
         Self {
@@ -82,8 +84,9 @@ impl App {
             mouse: MouseState::default(),
             hover_node: None,
             analytics: Analytics::default(),
-            show_analytics_panel: false,  // Disable ALL overlays for debugging
-            show_text_labels: false,      // Disable text by default for clean visualization
+            show_analytics_panel: false,  // Keep analytics panel off by default
+            show_text_labels: true,       // Enable constrained labels for orientation
+            label_hit_regions: Vec::new(),
             scene: Scene::new(),
             needs_relayout: true,
             viewport_width: 800.0,
@@ -219,7 +222,7 @@ impl App {
     /// Rebuild the Vello scene from the current layout.
     pub fn rebuild_scene(&mut self) {
         if let (Some(tree), Some(layout)) = (&self.tree, &self.layout) {
-            build_scene(
+            self.label_hit_regions = build_scene(
                 &mut self.scene,
                 self.cached_treemap_image.as_ref(),
                 &layout.rects,
@@ -259,7 +262,20 @@ impl App {
             //         self.viewport_width,
             //     );
             // }
+        } else {
+            self.label_hit_regions.clear();
         }
+    }
+
+    /// Hit-test interactive folder labels (used for label-only drill-down).
+    pub fn hit_test_label(&self, x: f32, y: f32) -> Option<NodeId> {
+        for region in self.label_hit_regions.iter().rev() {
+            let [x1, y1, x2, y2] = region.bounds;
+            if x >= x1 && x <= x2 && y >= y1 && y <= y2 {
+                return Some(region.node);
+            }
+        }
+        None
     }
 
     /// Handle viewport resize.

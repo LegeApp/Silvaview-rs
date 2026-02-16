@@ -46,21 +46,15 @@ pub enum InputAction {
 pub fn process_mouse_button(
     button: MouseButton,
     state: ElementState,
-    mouse: &MouseState,
-    layout_rects: &[LayoutRect],
+    _mouse: &MouseState,
+    _layout_rects: &[LayoutRect],
 ) -> InputAction {
     if state != ElementState::Pressed {
         return InputAction::None;
     }
 
     match button {
-        MouseButton::Left => {
-            if let Some(node) = hit_test(layout_rects, mouse.x, mouse.y) {
-                InputAction::DrillDown { node }
-            } else {
-                InputAction::None
-            }
-        }
+        MouseButton::Left => InputAction::None,
         MouseButton::Back | MouseButton::Right => InputAction::NavigateUp,
         _ => InputAction::None,
     }
