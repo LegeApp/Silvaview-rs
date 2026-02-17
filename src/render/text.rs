@@ -85,6 +85,7 @@ impl TextRenderer {
         let glyph_metrics = font_ref.glyph_metrics(size, &var_loc);
         let metrics = font_ref.metrics(size, &var_loc);
         let line_height = (metrics.ascent - metrics.descent + metrics.leading).max(font_size * 1.1);
+        let baseline = metrics.ascent.max(font_size * 0.75);
         let charmap = font_ref.charmap();
 
         let mut glyphs = Vec::with_capacity(text.chars().count());
@@ -115,7 +116,7 @@ impl TextRenderer {
             glyphs.push(Glyph {
                 id: gid.to_u32(),
                 x: pen_x,
-                y: pen_y,
+                y: pen_y + baseline,
             });
             pen_x += advance;
             max_x = max_x.max(pen_x);
