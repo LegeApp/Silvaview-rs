@@ -1,5 +1,6 @@
 use crate::layout::LayoutRect;
 use crate::render::colors;
+use crate::render::colors::ColorSettings;
 use crate::tree::arena::FileTree;
 use vello::kurbo::Rect;
 
@@ -12,6 +13,8 @@ pub struct CushionConfig {
     pub diffuse: f32,
     /// Normalized light direction [x, y, z]
     pub light: [f32; 3],
+    /// Fast approximate lighting mode (avoids per-pixel normal normalization).
+    pub fast_lighting: bool,
 }
 
 impl Default for CushionConfig {
@@ -20,9 +23,12 @@ impl Default for CushionConfig {
         let (lx, ly, lz) = (1.0_f32, 2.0, 10.0);
         let len = (lx * lx + ly * ly + lz * lz).sqrt();
         Self {
-            ambient: 0.4,   // Much brighter ambient (40% base brightness)
-            diffuse: 0.6,   // Strong diffuse for good shading contrast
+            // Lower ambient + stronger diffuse gives better visual separation.
+            ambient: 0.26,
+            diffuse: 0.92,
             light: [lx / len, ly / len, lz / len],
+            // Prioritize visual fidelity by default; fast mode remains optional.
+            fast_lighting: false,
         }
     }
 }
@@ -38,6 +44,7 @@ pub fn rasterize_cushions(
     layout_rects: &[LayoutRect],
     tree: &FileTree,
     config: &CushionConfig,
+    color_settings: &ColorSettings,
 ) -> Vec<u8> {
     let w = width as usize;
     let h = height as usize;
@@ -51,7 +58,18 @@ pub fn rasterize_cushions(
         pixel[3] = 255;
     }
 
-    let [lx, ly, lz] = config.light;
+    // Normalize light once per rasterization pass (never per-pixel).
+    let [mut lx, mut ly, mut lz] = config.light;
+    let light_len = (lx * lx + ly * ly + lz * lz).sqrt();
+    if light_len > 1e-6 {
+        lx /= light_len;
+        ly /= light_len;
+        lz /= light_len;
+    } else {
+        lx = 0.09759001;
+        ly = 0.19518003;
+        lz = 0.9759001;
+    }
 
     // Iterate rects in order: parents before children.
     // Children overwrite parent pixels, so deeper structure shows through.
@@ -60,7 +78,7 @@ pub fn rasterize_cushions(
 
         // Base color
         let base = if node.is_dir {
-            colors::directory_color(&node.name, rect.depth)
+            colors::directory_color(&node.name, rect.depth, color_settings)
         } else {
             let ext = if node.extension_id > 0 {
                 tree.extensions
@@ -70,7 +88,7 @@ pub fn rasterize_cushions(
             } else {
                 ""
             };
-            colors::extension_color(ext)
+            colors::extension_color(ext, color_settings)
         };
 
         let [sx1, sx2, sy1, sy2] = rect.surface;
@@ -81,41 +99,53 @@ pub fn rasterize_cushions(
         let px1 = ((rect.x + rect.w).ceil() as usize).min(w);
         let py1 = ((rect.y + rect.h).ceil() as usize).min(h);
 
-        for py in py0..py1 {
-            let py_f = py as f32 + 0.5;
-            // Precompute Y component of normal
-            let ny = -(2.0 * sy2 * py_f + sy1);
+        if config.fast_lighting {
+            // Approximate mode: skip per-pixel normal normalization for speed.
+            for py in py0..py1 {
+                let py_f = py as f32 + 0.5;
+                let ny = -(2.0 * sy2 * py_f + sy1);
 
-            let row_offset = py * w;
-            for px in px0..px1 {
-                let px_f = px as f32 + 0.5;
+                let row_offset = py * w;
+                for px in px0..px1 {
+                    let px_f = px as f32 + 0.5;
+                    let nx = -(2.0 * sx2 * px_f + sx1);
 
-                // Surface normal from accumulated parabolic coefficients
-                let nx = -(2.0 * sx2 * px_f + sx1);
-                // nz = 1.0 (implicit)
+                    // Fast path: approximate normalization with reciprocal sqrt.
+                    let lambert = (nx * lx + ny * ly + lz).max(0.0);
+                    let inv_len = (nx * nx + ny * ny + 1.0).max(1e-5).sqrt().recip();
+                    let ndotl = lambert * inv_len;
+                    let intensity = (config.ambient + config.diffuse * ndotl)
+                        .clamp(0.0, 1.0)
+                        .powf(1.22);
 
-                // Lambertian shading: I = ambient + diffuse * max(0, dot(n, light) / |n|)
-                let dot = nx * lx + ny * ly + lz;
-                let n_len = (nx * nx + ny * ny + 1.0).sqrt();
-                let cos_theta = (dot / n_len).max(0.0);
-                let intensity = config.ambient + config.diffuse * cos_theta;
+                    let idx = (row_offset + px) * 4;
+                    buf[idx] = (base.r * intensity * 255.0) as u8;
+                    buf[idx + 1] = (base.g * intensity * 255.0) as u8;
+                    buf[idx + 2] = (base.b * intensity * 255.0) as u8;
+                }
+            }
+        } else {
+            // Full Lambert mode: normalize per-pixel normal for higher fidelity.
+            for py in py0..py1 {
+                let py_f = py as f32 + 0.5;
+                let ny = -(2.0 * sy2 * py_f + sy1);
 
-                let r = (base.r * intensity).min(1.0).max(0.0);
-                let g = (base.g * intensity).min(1.0).max(0.0);
-                let b = (base.b * intensity).min(1.0).max(0.0);
+                let row_offset = py * w;
+                for px in px0..px1 {
+                    let px_f = px as f32 + 0.5;
+                    let nx = -(2.0 * sx2 * px_f + sx1);
 
-                let idx = (row_offset + px) * 4;
-                buf[idx] = (r * 255.0) as u8;
-                buf[idx + 1] = (g * 255.0) as u8;
-                buf[idx + 2] = (b * 255.0) as u8;
-                // alpha stays 255
+                    let dot = nx * lx + ny * ly + lz;
+                    let n_len = (nx * nx + ny * ny + 1.0).sqrt();
+                    let cos_theta = (dot / n_len).max(0.0);
+                    let intensity = (config.ambient + config.diffuse * cos_theta)
+                        .clamp(0.0, 1.0)
+                        .powf(1.22);
 
-                // Debug: Check for unexpected black pixels
-                if buf[idx] == 0 && buf[idx + 1] == 0 && buf[idx + 2] == 0 && px < 5 && py < 5 {
-                    tracing::warn!(
-                        "Black pixel at ({}, {}) for node '{}' (base: {:.2},{:.2},{:.2}, intensity: {:.2})",
-                        px, py, node.name, base.r, base.g, base.b, intensity
-                    );
+                    let idx = (row_offset + px) * 4;
+                    buf[idx] = (base.r * intensity * 255.0) as u8;
+                    buf[idx + 1] = (base.g * intensity * 255.0) as u8;
+                    buf[idx + 2] = (base.b * intensity * 255.0) as u8;
                 }
             }
         }

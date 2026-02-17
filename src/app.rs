@@ -1,19 +1,20 @@
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-use vello::peniko::Image;
+use vello::peniko::ImageData;
 use vello::Scene;
 
 use crate::layout::{self, Layout, LayoutConfig};
-use crate::render::cushion::{self, CushionConfig};
-use crate::render::scene::{build_scene, image_from_rgba, LabelHitRegion};
+use crate::render::colors::ColorSettings;
+use crate::render::cushion::CushionConfig;
+use crate::render::scene::{build_scene, LabelHitRegion};
 use crate::render::text::TextRenderer;
 use crate::scanner;
 use crate::scanner::types::ScanProgress;
 use crate::tree::arena::{FileTree, NodeId};
 use crate::ui::input::MouseState;
 use crate::ui::navigation::NavigationState;
-use crate::ui::overlay::Analytics;
+use crate::ui::overlay::{Analytics, SidebarHitId, SidebarHitRegion};
 
 /// Application state machine phases.
 #[derive(Debug, PartialEq, Eq)]
@@ -40,6 +41,7 @@ pub struct App {
     pub layout: Option<Layout>,
     pub layout_config: LayoutConfig,
     pub cushion_config: CushionConfig,
+    pub color_settings: ColorSettings,
     pub text_renderer: TextRenderer,
 
     // UI state
@@ -49,10 +51,13 @@ pub struct App {
     pub analytics: Analytics,
     pub show_analytics_panel: bool,
     pub show_text_labels: bool,
+    pub label_font_scale: f32,
+    pub label_font_path: String,
     pub label_hit_regions: Vec<LabelHitRegion>,
-    pub path_input: String,
-    pub path_editing: bool,
-    pub path_bar_hovered: bool,
+    pub sidebar_hit_regions: Vec<SidebarHitRegion>,
+    pub available_drives: Vec<crate::ui::drives::DriveEntry>,
+    pub show_hover_info: bool,
+    pub vibrancy_dragging: bool,
 
     // Rendering
     pub scene: Scene,
@@ -60,7 +65,7 @@ pub struct App {
     pub viewport_width: f32,
     pub viewport_height: f32,
     /// Cached CPU-rasterized treemap image (only rebuilt on layout changes).
-    pub cached_treemap_image: Option<Image>,
+    pub cached_treemap_image: Option<ImageData>,
 }
 
 impl App {
@@ -82,6 +87,7 @@ impl App {
             layout: None,
             layout_config: LayoutConfig::default(),
             cushion_config: CushionConfig::default(),
+            color_settings: ColorSettings::default(),
             text_renderer,
             navigation: None,
             mouse: MouseState::default(),
@@ -89,10 +95,13 @@ impl App {
             analytics: Analytics::default(),
             show_analytics_panel: false,  // Keep analytics panel off by default
             show_text_labels: true,       // Enable constrained labels for orientation
+            label_font_scale: 1.0,
+            label_font_path: String::new(),
             label_hit_regions: Vec::new(),
-            path_input: scan_path.to_string_lossy().to_string(),
-            path_editing: false,
-            path_bar_hovered: false,
+            sidebar_hit_regions: Vec::new(),
+            available_drives: crate::ui::drives::enumerate_drives(),
+            show_hover_info: true,
+            vibrancy_dragging: false,
             scene: Scene::new(),
             needs_relayout: true,
             viewport_width: 800.0,
@@ -142,13 +151,13 @@ impl App {
     /// Start scanning a new path (resets current tree/layout state).
     pub fn start_scan_path(&mut self, path: PathBuf) {
         self.scan_path = path.clone();
-        self.path_input = path.to_string_lossy().to_string();
         self.tree = None;
         self.layout = None;
         self.navigation = None;
         self.hover_node = None;
         self.cached_treemap_image = None;
         self.label_hit_regions.clear();
+        self.sidebar_hit_regions.clear();
         self.scan_progress = None;
         self.needs_relayout = true;
         self.start_scan();
@@ -196,7 +205,6 @@ impl App {
 
     /// Force a recomputation of the layout for the current viewport.
     pub fn relayout(&mut self) {
-        self.cached_treemap_image = None;  // Invalidate cache
         if let (Some(tree), Some(nav)) = (&self.tree, &self.navigation) {
             tracing::info!(
                 "Computing layout for tree with {} nodes, root={:?}, viewport={}x{}",
@@ -215,21 +223,6 @@ impl App {
             );
 
             tracing::info!("Layout computed: {} rectangles generated", computed_layout.rects.len());
-
-            // CPU-rasterize the cushion treemap and cache the image
-            let w = self.viewport_width as u32;
-            let h = self.viewport_height as u32;
-            if w > 0 && h > 0 {
-                let buf = cushion::rasterize_cushions(
-                    w,
-                    h,
-                    &computed_layout.rects,
-                    tree,
-                    &self.cushion_config,
-                );
-                self.cached_treemap_image = Some(image_from_rgba(buf, w, h));
-                tracing::info!("Cushion treemap rasterized: {}x{}", w, h);
-            }
 
             self.layout = Some(computed_layout);
 
@@ -251,6 +244,8 @@ impl App {
                 self.hover_node,
                 &mut self.text_renderer,
                 self.show_text_labels,
+                self.label_font_scale,
+                self.show_hover_info,
             );
 
             // Add UI overlays
@@ -288,13 +283,14 @@ impl App {
             self.label_hit_regions.clear();
         }
 
-        crate::ui::overlay::render_path_bar(
+        self.sidebar_hit_regions = crate::ui::overlay::render_left_sidebar(
             &mut self.scene,
             &mut self.text_renderer,
-            &self.path_input,
-            self.path_bar_hovered,
-            self.path_editing,
-            self.viewport_width,
+            self.viewport_height,
+            &self.available_drives,
+            &self.scan_path,
+            &self.color_settings,
+            self.show_hover_info,
         );
     }
 
@@ -309,8 +305,18 @@ impl App {
         None
     }
 
-    pub fn path_bar_bounds(&self) -> [f32; 4] {
-        crate::ui::overlay::path_bar_bounds(self.viewport_width)
+    pub fn hit_test_sidebar(&self, x: f32, y: f32) -> Option<SidebarHitId> {
+        for region in self.sidebar_hit_regions.iter().rev() {
+            let [x1, y1, x2, y2] = region.bounds;
+            if x >= x1 && x <= x2 && y >= y1 && y <= y2 {
+                return Some(region.id.clone());
+            }
+        }
+        None
+    }
+
+    pub fn sidebar_exclusion_rect(&self) -> [f32; 4] {
+        crate::ui::overlay::sidebar_panel_bounds(self.viewport_height, self.available_drives.len())
     }
 
     /// Handle viewport resize.
