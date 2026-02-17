@@ -8,21 +8,9 @@ description = "Modern GPU-accelerated disk space visualizer using cushion treema
 name = "Silvaview-rs"
 path = "src/main.rs"
 
-[[bin]]
-name = "debug-scan"
-path = "src/bin/debug-scan.rs"
-
-[[bin]]
-name = "debug-layout"
-path = "src/bin/debug-layout.rs"
-
-[[bin]]
-name = "validate-backend"
-path = "src/bin/validate-backend.rs"
-
 [dependencies]
-# GPU rendering — use vello's re-exported wgpu to avoid version conflicts
-vello = "0.4"
+# GPU rendering — local fork with texture override APIs enabled
+vello = { path = "vello/vello" }
 winit = "0.30"
 
 # Filesystem scanning
@@ -71,9 +59,12 @@ default-features = true
 [dependencies.rfd]
 version = "0.15"
 
-[dependencies.fontdue]
-path = "fontdue"
-features = ["simd"]
+[dependencies.skrifa]
+version = "0.40"
+features = ["std"]
+
+[dependencies.sysinfo]
+version = "0.33"
 
 [build-dependencies]
 winres = "0.1"

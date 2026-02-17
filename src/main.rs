@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod app;
 mod layout;
 mod render;
@@ -5,6 +7,7 @@ mod scanner;
 mod tree;
 mod ui;
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,11 +16,13 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
 
 use app::App;
+use app::AppPhase;
 use render::RenderState;
 use ui::input;
+use ui::overlay::SidebarHitId;
 
 /// Main application handler for winit's event loop.
 struct SilvaViewApp {
@@ -70,8 +75,16 @@ impl ApplicationHandler for SilvaViewApp {
         match render_state {
             Ok(state) => {
                 let size = window.inner_size();
+                let scale = window.scale_factor();
+                tracing::info!(
+                    "Window initialized: scale_factor={:.3}, physical_size={}x{}",
+                    scale,
+                    size.width,
+                    size.height
+                );
                 self.app.viewport_width = size.width as f32;
                 self.app.viewport_height = size.height as f32;
+                self.app.cached_treemap_image = Some(state.treemap_image().clone());
                 self.render_state = Some(state);
                 window.request_redraw();
             }
@@ -91,23 +104,39 @@ impl ApplicationHandler for SilvaViewApp {
             WindowEvent::Resized(size) => {
                 if let Some(render) = &mut self.render_state {
                     render.resize(size.width, size.height);
+                    self.app.cached_treemap_image = Some(render.treemap_image().clone());
                     self.app.resize(size.width, size.height);
+                }
+            }
+
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                tracing::info!("Scale factor changed: {:.3}", scale_factor);
+                if let (Some(render), Some(window)) = (&mut self.render_state, &self.window) {
+                    let size = window.inner_size();
+                    render.resize(size.width, size.height);
+                    self.app.cached_treemap_image = Some(render.treemap_image().clone());
+                    self.app.resize(size.width, size.height);
+                    window.request_redraw();
                 }
             }
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.app.mouse.x = position.x as f32;
                 self.app.mouse.y = position.y as f32;
-
-                let [x1, y1, x2, y2] = self.app.path_bar_bounds();
-                let hovered = self.app.mouse.x >= x1
-                    && self.app.mouse.x <= x2
-                    && self.app.mouse.y >= y1
-                    && self.app.mouse.y <= y2;
-                if hovered != self.app.path_bar_hovered {
-                    self.app.path_bar_hovered = hovered;
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
+                if self.app.vibrancy_dragging {
+                    if let Some(track) = self
+                        .app
+                        .sidebar_hit_regions
+                        .iter()
+                        .find(|r| matches!(r.id, SidebarHitId::VibrancyTrack))
+                        .map(|r| r.bounds)
+                    {
+                        self.app.color_settings.vibrancy =
+                            ui::overlay::vibrancy_value_from_track_x(self.app.mouse.x, track);
+                        self.app.needs_relayout = true;
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
                     }
                 }
 
@@ -130,24 +159,83 @@ impl ApplicationHandler for SilvaViewApp {
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
+                if button == winit::event::MouseButton::Left {
+                    self.app.mouse.left_pressed = state == ElementState::Pressed;
+                    if state == ElementState::Released {
+                        self.app.vibrancy_dragging = false;
+                    }
+                }
+
                 if state == ElementState::Pressed && button == winit::event::MouseButton::Left {
-                    if self.app.path_bar_hovered {
-                        self.app.path_editing = true;
+                    if let Some(hit) = self.app.hit_test_sidebar(self.app.mouse.x, self.app.mouse.y) {
+                        match hit {
+                            SidebarHitId::SelectDrive(path) => {
+                                self.app.start_scan_path(path);
+                                self.update_window_title();
+                            }
+                            SidebarHitId::CycleColorMode => {
+                                use crate::render::colors::ColorMode;
+                                self.app.color_settings.mode = match self.app.color_settings.mode {
+                                    ColorMode::Category => ColorMode::CategoryExtension,
+                                    ColorMode::CategoryExtension => ColorMode::ExtensionHash,
+                                    ColorMode::ExtensionHash => ColorMode::Category,
+                                };
+                                self.app.needs_relayout = true;
+                            }
+                            SidebarHitId::VibrancyDown => {
+                                self.app.color_settings.vibrancy =
+                                    (self.app.color_settings.vibrancy - 0.08).clamp(0.6, 2.0);
+                                self.app.needs_relayout = true;
+                            }
+                            SidebarHitId::VibrancyUp => {
+                                self.app.color_settings.vibrancy =
+                                    (self.app.color_settings.vibrancy + 0.08).clamp(0.6, 2.0);
+                                self.app.needs_relayout = true;
+                            }
+                            SidebarHitId::VibrancyTrack => {
+                                if let Some(track) = self
+                                    .app
+                                    .sidebar_hit_regions
+                                    .iter()
+                                    .find(|r| matches!(r.id, SidebarHitId::VibrancyTrack))
+                                    .map(|r| r.bounds)
+                                {
+                                    self.app.color_settings.vibrancy =
+                                        ui::overlay::vibrancy_value_from_track_x(self.app.mouse.x, track);
+                                    self.app.vibrancy_dragging = true;
+                                    self.app.needs_relayout = true;
+                                }
+                            }
+                            SidebarHitId::ToggleHoverInfo => {
+                                self.app.show_hover_info = !self.app.show_hover_info;
+                            }
+                        }
                         if let Some(window) = &self.window {
                             window.request_redraw();
                         }
                         return;
-                    } else {
-                        self.app.path_editing = false;
                     }
 
-                    // Navigation is intentionally label-only: clicking data blocks is reserved
-                    // for future file inspection interactions.
                     if let Some(node) = self.app.hit_test_label(self.app.mouse.x, self.app.mouse.y) {
                         self.app.drill_down(node);
                         self.update_window_title();
                         if let Some(window) = &self.window {
                             window.request_redraw();
+                        }
+                        return;
+                    }
+
+                    // Fallback: allow clicking a directory rectangle to drill down.
+                    // Sidebar hit-testing already returned above, so this only applies to treemap tiles.
+                    if let (Some(layout), Some(tree)) = (&self.app.layout, &self.app.tree) {
+                        if let Some(node) = input::hit_test(&layout.rects, self.app.mouse.x, self.app.mouse.y) {
+                            if tree.get(node).is_dir {
+                                self.app.drill_down(node);
+                                self.update_window_title();
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                            }
                         }
                     }
                     return;
@@ -168,61 +256,6 @@ impl ApplicationHandler for SilvaViewApp {
 
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
-                    if !self.app.path_editing
-                        && self.app.path_bar_hovered
-                        && matches!(event.logical_key.as_ref(), Key::Character(_))
-                    {
-                        self.app.path_editing = true;
-                    }
-
-                    if self.app.path_editing {
-                        match event.logical_key.as_ref() {
-                            Key::Named(NamedKey::Enter) => {
-                                let path_text = self.app.path_input.trim();
-                                if !path_text.is_empty() {
-                                    self.app.start_scan_path(normalize_scan_path(path_text));
-                                    self.app.path_editing = false;
-                                    if let Some(window) = &self.window {
-                                        window.request_redraw();
-                                    }
-                                }
-                                return;
-                            }
-                            Key::Named(NamedKey::Backspace) => {
-                                self.app.path_input.pop();
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                                return;
-                            }
-                            Key::Named(NamedKey::Escape) => {
-                                self.app.path_editing = false;
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                                return;
-                            }
-                            Key::Named(NamedKey::Space) => {
-                                self.app.path_input.push(' ');
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                                return;
-                            }
-                            Key::Character(chars) => {
-                                let text = chars.to_string();
-                                if !text.chars().any(|c| c.is_control()) {
-                                    self.app.path_input.push_str(&text);
-                                    if let Some(window) = &self.window {
-                                        window.request_redraw();
-                                    }
-                                }
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
-
                     if matches!(event.logical_key.as_ref(), Key::Named(NamedKey::F2)) {
                         let settings = ui::config_dialog::run_config_dialog(
                             "SilvaView-rs — Settings",
@@ -231,6 +264,8 @@ impl ApplicationHandler for SilvaViewApp {
                                 layout: self.app.layout_config.clone(),
                                 cushion: self.app.cushion_config,
                                 show_labels: self.app.show_text_labels,
+                                label_font_scale: self.app.label_font_scale,
+                                label_font_path: self.app.label_font_path.clone(),
                             },
                             false,
                         );
@@ -238,6 +273,20 @@ impl ApplicationHandler for SilvaViewApp {
                             self.app.layout_config = settings.layout;
                             self.app.cushion_config = settings.cushion;
                             self.app.show_text_labels = settings.show_labels;
+                            self.app.label_font_scale = settings.label_font_scale;
+                            self.app.label_font_path = settings.label_font_path.clone();
+                            if !settings.label_font_path.trim().is_empty() {
+                                if let Err(e) = self.app.text_renderer.load_font_from_path(
+                                    "default",
+                                    Path::new(settings.label_font_path.trim()),
+                                ) {
+                                    tracing::warn!(
+                                        "Failed to load custom font '{}': {}",
+                                        settings.label_font_path,
+                                        e
+                                    );
+                                }
+                            }
                             self.app.needs_relayout = true;
                             if let Some(window) = &self.window {
                                 window.request_redraw();
@@ -252,6 +301,14 @@ impl ApplicationHandler for SilvaViewApp {
             }
 
             WindowEvent::RedrawRequested => {
+                if let Some(window) = &self.window {
+                    if self.app.phase == app::AppPhase::Scanning {
+                        window.set_cursor(CursorIcon::Progress);
+                    } else {
+                        window.set_cursor(CursorIcon::Default);
+                    }
+                }
+
                 // Poll for scan completion
                 if self.app.phase == app::AppPhase::Scanning {
                     if self.app.poll_scan() {
@@ -260,8 +317,25 @@ impl ApplicationHandler for SilvaViewApp {
                 }
 
                 // Recompute layout if needed
-                if self.app.needs_relayout && self.app.phase == app::AppPhase::Ready {
+                if self.app.needs_relayout && self.app.phase == AppPhase::Ready {
                     self.app.relayout();
+                    if let (Some(render), Some(layout), Some(tree)) =
+                        (&mut self.render_state, &self.app.layout, &self.app.tree)
+                    {
+                        render.update_cushion_treemap(
+                            &layout.rects,
+                            tree,
+                            &self.app.cushion_config,
+                            &self.app.color_settings,
+                            self.app.sidebar_exclusion_rect(),
+                        );
+                        self.app.cached_treemap_image = Some(render.treemap_image().clone());
+                        tracing::info!(
+                            "Cushion treemap rasterized (WGSL): {}x{}",
+                            render.surface_config.width,
+                            render.surface_config.height
+                        );
+                    }
                 }
 
                 // Build and render the scene
@@ -314,22 +388,6 @@ impl SilvaViewApp {
     }
 }
 
-fn normalize_scan_path(text: &str) -> PathBuf {
-    let trimmed = text.trim();
-    let bytes = trimmed.as_bytes();
-    if bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-        return PathBuf::from(format!("{}\\", trimmed));
-    }
-    if bytes.len() == 3
-        && bytes[1] == b':'
-        && (bytes[2] == b'\\' || bytes[2] == b'/')
-        && bytes[0].is_ascii_alphabetic()
-    {
-        return PathBuf::from(format!("{}\\", &trimmed[..2]));
-    }
-    PathBuf::from(trimmed)
-}
-
 fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
@@ -344,7 +402,16 @@ fn main() -> Result<()> {
     let scan_path = std::env::args()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("C:\\"));
+        .unwrap_or_else(|| {
+            #[cfg(windows)]
+            {
+                PathBuf::from("C:\\")
+            }
+            #[cfg(not(windows))]
+            {
+                PathBuf::from("/")
+            }
+        });
 
     // Check for admin privileges if scanning a drive root
     #[cfg(windows)]

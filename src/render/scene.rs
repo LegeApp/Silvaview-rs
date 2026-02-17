@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use vello::kurbo::{Affine, Rect};
-use vello::peniko::{Blob, Color, Fill, Image, ImageFormat};
+use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
 use vello::Scene;
 
 use super::cushion;
@@ -19,12 +19,14 @@ pub struct LabelHitRegion {
 /// Build a Vello scene from the cached treemap image + overlays.
 pub fn build_scene(
     scene: &mut Scene,
-    treemap_image: Option<&Image>,
+    treemap_image: Option<&ImageData>,
     layout_rects: &[LayoutRect],
     tree: &FileTree,
     hover_node: Option<NodeId>,
     text_renderer: &mut TextRenderer,
     show_text_labels: bool,
+    label_font_scale: f32,
+    show_hover_info: bool,
 ) -> Vec<LabelHitRegion> {
     scene.reset();
     let mut label_hit_regions = Vec::new();
@@ -130,7 +132,8 @@ pub fn build_scene(
                 continue;
             }
 
-            let font_size = (label_band_h * 0.62).clamp(9.0, 14.0);
+            let scale = label_font_scale.clamp(0.6, 2.5);
+            let font_size = ((label_band_h * 0.62).clamp(9.0, 14.0) * scale).clamp(8.0, 28.0);
             let base = format!("{}  {}", node.name, format_size(node.size));
             let label = truncate_label(&base, max_text_w, font_size);
             if label.is_empty() {
@@ -186,12 +189,67 @@ pub fn build_scene(
 
     // Hover highlight helps orient which rectangle is under the cursor.
     if let Some(hover_id) = hover_node {
+        let mut hovered_rect: Option<&LayoutRect> = None;
         for rect in layout_rects {
             if rect.node == hover_id {
                 let shape = cushion::layout_to_rect(rect);
                 let highlight = Color::new([1.0f32, 1.0, 1.0, 0.20]);
                 scene.fill(Fill::NonZero, Affine::IDENTITY, highlight, None, &shape);
+                hovered_rect = Some(rect);
                 break;
+            }
+        }
+
+        if show_hover_info {
+            if let (Some(rect), Some(tree)) = (hovered_rect, Some(tree)) {
+                let node = tree.get(hover_id);
+                let text = format!("{}  {}", node.name, format_size(node.size));
+                let in_rect = rect.w >= 180.0 && rect.h >= 32.0;
+                if let Some(rendered) = text_renderer.render_text(&text, "default", 13.0, Some(320.0)) {
+                    if in_rect {
+                        let x = rect.x + 6.0;
+                        let y = rect.y + (rect.h - rendered.height as f32).max(2.0) * 0.5;
+                        let bg = Rect::new(
+                            x as f64 - 2.0,
+                            y as f64 - 1.0,
+                            (x + rendered.width as f32 + 4.0) as f64,
+                            (y + rendered.height as f32 + 2.0) as f64,
+                        );
+                        scene.fill(
+                            Fill::NonZero,
+                            Affine::IDENTITY,
+                            Color::new([0.0, 0.0, 0.0, 0.42]),
+                            None,
+                            &bg,
+                        );
+                        draw_text_to_scene(scene, rendered, x, y);
+                    } else {
+                        let place_right = rect.x + rect.w + 180.0 < layout_rects
+                            .iter()
+                            .map(|r| r.x + r.w)
+                            .fold(0.0_f32, f32::max);
+                        let bx = if place_right {
+                            rect.x + rect.w + 8.0
+                        } else {
+                            (rect.x - rendered.width as f32 - 14.0).max(240.0)
+                        };
+                        let by = rect.y.clamp(8.0, 720.0);
+                        let bg = Rect::new(
+                            bx as f64,
+                            by as f64,
+                            (bx + rendered.width as f32 + 10.0) as f64,
+                            (by + rendered.height as f32 + 8.0) as f64,
+                        );
+                        scene.fill(
+                            Fill::NonZero,
+                            Affine::IDENTITY,
+                            Color::new([0.05, 0.06, 0.07, 0.90]),
+                            None,
+                            &bg,
+                        );
+                        draw_text_to_scene(scene, rendered, bx + 5.0, by + 4.0);
+                    }
+                }
             }
         }
     }
@@ -201,23 +259,23 @@ pub fn build_scene(
 
 /// Draw rendered text to a Vello scene.
 fn draw_text_to_scene(scene: &mut Scene, text_result: TextRenderResult, x: f32, y: f32) {
-    for glyph in text_result.glyphs {
-        if glyph.bitmap.is_empty() {
-            continue;
-        }
-
-        // Create image from glyph bitmap
-        let glyph_image = Image::new(
-            Blob::new(Arc::new(glyph.bitmap)),
-            ImageFormat::Rgba8,
-            glyph.width as u32,
-            glyph.height as u32,
+    let tx = x.round();
+    let ty = y.round();
+    let transform = Affine::translate((tx as f64, ty as f64));
+    scene
+        .draw_glyphs(&text_result.font)
+        .font_size(text_result.font_size)
+        .transform(transform)
+        .brush(Color::WHITE)
+        .hint(true)
+        .draw(
+            Fill::NonZero,
+            text_result.glyphs.into_iter().map(|mut glyph| {
+                glyph.x = glyph.x.round();
+                glyph.y = glyph.y.round();
+                glyph
+            }),
         );
-
-        // Draw glyph at position
-        let transform = Affine::translate((x as f64 + glyph.x as f64, y as f64 + glyph.y as f64));
-        scene.draw_image(&glyph_image, transform);
-    }
 }
 
 fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
@@ -251,8 +309,13 @@ fn truncate_label(name: &str, max_width: f32, font_size: f32) -> String {
     format!("{}...", truncated)
 }
 
-/// Create a `peniko::Image` from an RGBA pixel buffer.
-pub fn image_from_rgba(buf: Vec<u8>, width: u32, height: u32) -> Image {
-    let data: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(buf);
-    Image::new(Blob::new(data), ImageFormat::Rgba8, width, height)
+/// Create a `peniko::ImageData` from an RGBA pixel buffer.
+pub fn image_from_rgba(buf: Vec<u8>, width: u32, height: u32) -> ImageData {
+    ImageData {
+        data: Blob::new(Arc::new(buf)),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width,
+        height,
+    }
 }

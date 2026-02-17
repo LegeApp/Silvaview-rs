@@ -98,13 +98,200 @@ pub fn compute_layout(
     viewport_h: f32,
     config: &LayoutConfig,
 ) -> Layout {
-    let mut rects = Vec::with_capacity(tree.len() / 4); // rough estimate
+    compute_layout_in_rect(tree, root, 0.0, 0.0, viewport_w, viewport_h, config)
+}
+
+/// Compute layout around a reserved top-left sidebar rectangle by using a non-overlapping
+/// L-shape: top-right strip + full-width bottom strip.
+pub fn compute_layout_lshape(
+    tree: &FileTree,
+    root: NodeId,
+    viewport_w: f32,
+    viewport_h: f32,
+    exclusion_rect: [f32; 4],
+    config: &LayoutConfig,
+) -> Layout {
+    let mut rects = Vec::with_capacity(tree.len() / 4);
     let mut node_to_rect = HashMap::with_capacity(rects.capacity());
 
     let root_rect = LayoutRect {
         node: root,
         x: 0.0,
         y: 0.0,
+        w: viewport_w,
+        h: viewport_h,
+        depth: 0,
+        surface: [0.0; 4],
+    };
+    rects.push(root_rect);
+    node_to_rect.insert(root, 0);
+
+    if !tree.get(root).is_dir {
+        return Layout { rects, node_to_rect };
+    }
+
+    let pad = 8.0;
+    let split_y = (exclusion_rect[3] + pad).clamp(0.0, viewport_h);
+    let right_x = (exclusion_rect[2] + pad).clamp(0.0, viewport_w);
+    let top_h = split_y;
+    let right_w = (viewport_w - right_x).max(0.0);
+    let bottom_h = (viewport_h - split_y).max(0.0);
+
+    // Non-overlapping L-shape regions.
+    let top_right = Region {
+        x: right_x,
+        y: 0.0,
+        w: right_w,
+        h: top_h,
+    };
+    let bottom = Region {
+        x: 0.0,
+        y: split_y,
+        w: viewport_w,
+        h: bottom_h,
+    };
+
+    let mut regions: Vec<Region> = Vec::new();
+    if top_right.area() >= config.min_area {
+        regions.push(top_right);
+    }
+    if bottom.area() >= config.min_area {
+        regions.push(bottom);
+    }
+    if regions.is_empty() {
+        return compute_layout_in_rect(tree, root, 0.0, 0.0, viewport_w, viewport_h, config);
+    }
+    if regions.len() == 1 {
+        let r = regions[0];
+        return compute_layout_in_rect(tree, root, r.x, r.y, r.w, r.h, config);
+    }
+
+    let parent_node = tree.get(root);
+    let parent_size = parent_node.size as f64;
+    if parent_size <= 0.0 {
+        return Layout { rects, node_to_rect };
+    }
+
+    let total_available_area = regions.iter().map(|r| r.area() as f64).sum::<f64>();
+    let visible = collect_visible_children(
+        tree,
+        root,
+        parent_size,
+        total_available_area,
+        0,
+        config,
+        &parent_node.name,
+    );
+    if visible.is_empty() {
+        return Layout { rects, node_to_rect };
+    }
+
+    let total_visible_area = visible.iter().map(|(_, a)| *a).sum::<f64>();
+    let target_top = (regions[0].area() as f64 / total_available_area) * total_visible_area;
+    let mut top_items: Vec<(NodeId, f64)> = Vec::new();
+    let mut bottom_items: Vec<(NodeId, f64)> = Vec::new();
+    let mut top_sum = 0.0_f64;
+    for item in visible.iter().copied() {
+        // Fill top until it reaches its target share; route remaining items to bottom.
+        // This preserves global proportions and avoids "single tiny file fills whole region".
+        if top_sum < target_top {
+            top_sum += item.1;
+            top_items.push(item);
+        } else {
+            bottom_items.push(item);
+        }
+    }
+    if top_items.is_empty() && !bottom_items.is_empty() {
+        top_items.push(bottom_items.remove(0));
+    }
+    if bottom_items.is_empty() && !top_items.is_empty() {
+        bottom_items.push(top_items.pop().unwrap());
+    }
+    let top_area_before_scale = top_items.iter().map(|(_, a)| *a).sum::<f64>();
+    let bottom_area_before_scale = bottom_items.iter().map(|(_, a)| *a).sum::<f64>();
+    let total_before_scale = (top_area_before_scale + bottom_area_before_scale).max(1e-6);
+    tracing::info!(
+        "L-shape split: top={} items ({:.1}%), bottom={} items ({:.1}%), target_top={:.1}%",
+        top_items.len(),
+        (top_area_before_scale / total_before_scale) * 100.0,
+        bottom_items.len(),
+        (bottom_area_before_scale / total_before_scale) * 100.0,
+        (target_top / total_visible_area.max(1e-6)) * 100.0
+    );
+
+    let assignments = [(regions[0], top_items), (regions[1], bottom_items)];
+    for (region, mut items) in assignments {
+        if items.is_empty() || region.area() < config.min_area {
+            continue;
+        }
+        let sum = items.iter().map(|(_, a)| *a).sum::<f64>();
+        if sum <= 0.0 {
+            continue;
+        }
+        let scale = region.area() as f64 / sum;
+        for (_, a) in &mut items {
+            *a *= scale;
+        }
+        let areas: Vec<f64> = items.iter().map(|(_, a)| *a).collect();
+        let positioned = squarify(
+            &areas,
+            region.x as f64,
+            region.y as f64,
+            region.w as f64,
+            region.h as f64,
+        );
+        for (i, pos) in positioned.iter().enumerate() {
+            push_child_rect_and_recurse(
+                tree,
+                items[i].0,
+                pos.x as f32,
+                pos.y as f32,
+                pos.w as f32,
+                pos.h as f32,
+                0,
+                [0.0; 4],
+                config.cushion_height,
+                config,
+                &mut rects,
+                &mut node_to_rect,
+            );
+        }
+    }
+
+    Layout { rects, node_to_rect }
+}
+
+#[derive(Clone, Copy)]
+struct Region {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl Region {
+    fn area(self) -> f32 {
+        self.w.max(0.0) * self.h.max(0.0)
+    }
+}
+
+/// Compute layout for any subtree inside an explicit viewport rectangle.
+pub fn compute_layout_in_rect(
+    tree: &FileTree,
+    root: NodeId,
+    viewport_x: f32,
+    viewport_y: f32,
+    viewport_w: f32,
+    viewport_h: f32,
+    config: &LayoutConfig,
+) -> Layout {
+    let mut rects = Vec::with_capacity(tree.len() / 4); // rough estimate
+    let mut node_to_rect = HashMap::with_capacity(rects.capacity());
+
+    let root_rect = LayoutRect {
+        node: root,
+        x: viewport_x,
+        y: viewport_y,
         w: viewport_w,
         h: viewport_h,
         depth: 0,
@@ -118,8 +305,8 @@ pub fn compute_layout(
         layout_children(
             tree,
             root,
-            0.0,
-            0.0,
+            viewport_x,
+            viewport_y,
             viewport_w,
             viewport_h,
             0,
@@ -132,6 +319,131 @@ pub fn compute_layout(
     }
 
     Layout { rects, node_to_rect }
+}
+
+fn collect_visible_children(
+    tree: &FileTree,
+    parent: NodeId,
+    parent_size: f64,
+    total_area: f64,
+    depth: u16,
+    config: &LayoutConfig,
+    parent_name: &str,
+) -> Vec<(NodeId, f64)> {
+    let mut items: Vec<(NodeId, f64)> = tree
+        .children(parent)
+        .map(|id| {
+            let area = (tree.get(id).size as f64 / parent_size) * total_area;
+            (id, area)
+        })
+        .filter(|&(_, area)| area.is_finite() && area > 0.0)
+        .collect();
+    items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let mut visible: Vec<(NodeId, f64)> =
+        Vec::with_capacity(items.len().min(config.max_children_per_dir));
+    let mut covered_area = 0.0_f64;
+    for (idx, item) in items.iter().enumerate() {
+        if visible.len() >= config.max_children_per_dir {
+            break;
+        }
+        let keep = idx == 0 || visible.len() < 8 || (covered_area / total_area) < config.child_coverage_target;
+        if !keep {
+            break;
+        }
+        visible.push(*item);
+        covered_area += item.1;
+    }
+    if visible.is_empty() {
+        visible.push(items[0]);
+        covered_area = items[0].1;
+    }
+    if covered_area <= 0.0 {
+        return Vec::new();
+    }
+    let dropped = items.len().saturating_sub(visible.len());
+    if dropped > 0 && depth <= 2 {
+        tracing::debug!(
+            "LOD: parent '{}' depth {} keeps {} of {} children ({:.2}% area, dropped={})",
+            parent_name,
+            depth,
+            visible.len(),
+            items.len(),
+            (covered_area / total_area) * 100.0,
+            dropped
+        );
+    }
+
+    let scale = total_area / covered_area;
+    for (_, area) in &mut visible {
+        *area *= scale;
+    }
+    visible
+}
+
+fn push_child_rect_and_recurse(
+    tree: &FileTree,
+    mut child_id: NodeId,
+    cx: f32,
+    cy: f32,
+    cw: f32,
+    ch: f32,
+    depth: u16,
+    parent_surface: [f32; 4],
+    cushion_h: f32,
+    config: &LayoutConfig,
+    rects: &mut Vec<LayoutRect>,
+    node_to_rect: &mut HashMap<NodeId, usize>,
+) {
+    if cw <= 0.5 || ch <= 0.5 {
+        return;
+    }
+
+    let mut child_depth = depth.saturating_add(1);
+    if tree.get(child_id).is_dir {
+        let (collapsed, collapsed_levels) = collapse_single_dir_chain(tree, child_id);
+        child_id = collapsed;
+        child_depth = child_depth.saturating_add(collapsed_levels as u16);
+    }
+
+    let [mut sx1, mut sx2, mut sy1, mut sy2] = parent_surface;
+    add_ridge(cx, cx + cw, cushion_h, &mut sx1, &mut sx2);
+    add_ridge(cy, cy + ch, cushion_h, &mut sy1, &mut sy2);
+    let surface = [sx1, sx2, sy1, sy2];
+
+    let rect = LayoutRect {
+        node: child_id,
+        x: cx,
+        y: cy,
+        w: cw,
+        h: ch,
+        depth: child_depth,
+        surface,
+    };
+
+    let idx = rects.len();
+    rects.push(rect);
+    node_to_rect.insert(child_id, idx);
+
+    if tree.get(child_id).is_dir && cw >= config.recurse_min_side && ch >= config.recurse_min_side {
+        layout_children(
+            tree,
+            child_id,
+            cx,
+            cy,
+            cw,
+            ch,
+            child_depth,
+            surface,
+            cushion_h * config.cushion_falloff,
+            config,
+            rects,
+            node_to_rect,
+        );
+    }
 }
 
 /// Recursively layout children (now with sorting + better culling).

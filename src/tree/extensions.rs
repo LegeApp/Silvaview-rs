@@ -9,6 +9,8 @@ pub enum FileCategory {
     Audio,
     /// Documents: pdf, doc, docx, txt, rtf, odt, xls, xlsx, ppt, csv
     Document,
+    /// Ebooks: epub, mobi, azw3, djvu
+    Ebook,
     /// Archives: zip, rar, 7z, tar, gz, bz2, xz
     Archive,
     /// Code: rs, py, js, ts, c, cpp, h, java, go, rb, php, html, css
@@ -19,6 +21,12 @@ pub enum FileCategory {
     Config,
     /// Fonts: ttf, otf, woff, woff2
     Font,
+    /// Installers/packages: msi, pkg, deb, rpm, appimage
+    Installer,
+    /// 3D / assets
+    Asset3D,
+    /// Backups / snapshots
+    Backup,
     /// Database: db, sqlite, mdb
     Database,
     /// Disk images / VM: iso, img, vhd, vmdk
@@ -45,7 +53,10 @@ pub fn categorize_extension(ext: &str) -> FileCategory {
 
         // Documents
         "pdf" | "doc" | "docx" | "txt" | "rtf" | "odt" | "xls" | "xlsx" | "ppt" | "pptx"
-        | "csv" | "md" | "epub" | "mobi" => FileCategory::Document,
+        | "csv" | "md" => FileCategory::Document,
+
+        // Ebooks
+        "epub" | "mobi" | "azw3" | "djvu" | "djv" => FileCategory::Ebook,
 
         // Archives
         "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "zst" | "lz4" | "cab" => {
@@ -59,8 +70,11 @@ pub fn categorize_extension(ext: &str) -> FileCategory {
         | "vue" | "svelte" => FileCategory::Code,
 
         // Executables
-        "exe" | "dll" | "sys" | "msi" | "bat" | "cmd" | "ps1" | "com" | "scr" | "so"
+        "exe" | "dll" | "sys" | "bat" | "cmd" | "ps1" | "com" | "scr" | "so"
         | "dylib" | "elf" => FileCategory::Executable,
+
+        // Installers
+        "msi" | "pkg" | "deb" | "rpm" | "appimage" => FileCategory::Installer,
 
         // Config
         "ini" | "cfg" | "toml" | "yaml" | "yml" | "json" | "xml" | "reg" | "conf" | "env"
@@ -69,11 +83,19 @@ pub fn categorize_extension(ext: &str) -> FileCategory {
         // Fonts
         "ttf" | "otf" | "woff" | "woff2" | "eot" => FileCategory::Font,
 
+        // 3D assets
+        "blend" | "fbx" | "obj" | "stl" | "dae" | "gltf" | "glb" | "usd" | "usdz" => {
+            FileCategory::Asset3D
+        }
+
         // Database
         "db" | "sqlite" | "sqlite3" | "mdb" | "accdb" => FileCategory::Database,
 
         // Disk images
         "iso" | "img" | "vhd" | "vhdx" | "vmdk" | "qcow2" => FileCategory::DiskImage,
+
+        // Backups
+        "bak" | "old" | "backup" => FileCategory::Backup,
 
         _ => FileCategory::Other,
     }
