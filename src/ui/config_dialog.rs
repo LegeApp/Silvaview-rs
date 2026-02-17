@@ -13,6 +13,8 @@ pub struct DialogResult {
     pub layout: LayoutConfig,
     pub cushion: CushionConfig,
     pub show_labels: bool,
+    pub label_font_scale: f32,
+    pub label_font_path: String,
 }
 
 pub fn run_config_dialog(
@@ -57,6 +59,8 @@ enum Message {
     CushionHeightChanged(f32),
     CushionFalloffChanged(f32),
     ShowLabelsChanged(bool),
+    LabelFontScaleChanged(f32),
+    LabelFontPathChanged(String),
     Start,
     Cancel,
 }
@@ -71,6 +75,8 @@ struct ConfigDialog {
     ambient: f32,
     diffuse: f32,
     show_labels: bool,
+    label_font_scale: f32,
+    label_font_path: String,
     output: Arc<Mutex<Option<DialogResult>>>,
     show_path_input: bool,
 }
@@ -87,6 +93,8 @@ impl ConfigDialog {
             ambient: initial.cushion.ambient,
             diffuse: initial.cushion.diffuse,
             show_labels: initial.show_labels,
+            label_font_scale: initial.label_font_scale,
+            label_font_path: initial.label_font_path,
             output,
             show_path_input,
         }
@@ -136,6 +144,14 @@ impl ConfigDialog {
                 self.show_labels = v;
                 Task::none()
             }
+            Message::LabelFontScaleChanged(v) => {
+                self.label_font_scale = v;
+                Task::none()
+            }
+            Message::LabelFontPathChanged(v) => {
+                self.label_font_path = v;
+                Task::none()
+            }
             Message::Start => {
                 let path = PathBuf::from(self.path_text.trim());
                 if path.as_os_str().is_empty() {
@@ -159,6 +175,8 @@ impl ConfigDialog {
                         layout,
                         cushion,
                         show_labels: self.show_labels,
+                        label_font_scale: self.label_font_scale,
+                        label_font_path: self.label_font_path.clone(),
                     });
                 }
 
@@ -239,7 +257,16 @@ fn view(state: &ConfigDialog) -> Element<'_, Message> {
             0.05..=1.20,
             Message::CushionFalloffChanged
         ),
-        checkbox("Show folder labels", state.show_labels).on_toggle(Message::ShowLabelsChanged)
+        checkbox("Show folder labels", state.show_labels).on_toggle(Message::ShowLabelsChanged),
+        setting_slider(
+            "Label Font Scale",
+            state.label_font_scale,
+            0.6..=2.5,
+            Message::LabelFontScaleChanged
+        ),
+        text_input("Custom font path (optional, .ttf)", &state.label_font_path)
+            .on_input(Message::LabelFontPathChanged)
+            .padding(8)
     ]
     .spacing(10);
 
