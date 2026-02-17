@@ -200,5 +200,5 @@ MIT (to be determined)
 
 ## Credits
 
-Inspired by **SilvaView** (Jarke J. van Wijk, 2006)
+Inspired by **SequoiaView** (Jarke J. van Wijk, 2006)
 Cushion Treemaps: "Cushion Treemaps: Visualization of Hierarchical Information" (van Wijk & van de Wetering, 1999)
