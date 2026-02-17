@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::Instant;
 
 use vello::peniko::ImageData;
 use vello::Scene;
@@ -58,6 +59,8 @@ pub struct App {
     pub available_drives: Vec<crate::ui::drives::DriveEntry>,
     pub show_hover_info: bool,
     pub vibrancy_dragging: bool,
+    pub show_admin_slow_warning: bool,
+    pub loading_started: Option<Instant>,
 
     // Rendering
     pub scene: Scene,
@@ -102,6 +105,8 @@ impl App {
             available_drives: crate::ui::drives::enumerate_drives(),
             show_hover_info: true,
             vibrancy_dragging: false,
+            show_admin_slow_warning: false,
+            loading_started: None,
             scene: Scene::new(),
             needs_relayout: true,
             viewport_width: 800.0,
@@ -113,6 +118,20 @@ impl App {
     /// Start scanning the filesystem in a background thread.
     pub fn start_scan(&mut self) {
         self.phase = AppPhase::Scanning;
+        self.loading_started = Some(Instant::now());
+        #[cfg(windows)]
+        {
+            let is_root = self
+                .scan_path
+                .to_str()
+                .map(|s| s.ends_with(":\\"))
+                .unwrap_or(false);
+            self.show_admin_slow_warning = is_root && !crate::scanner::elevation::is_elevated();
+        }
+        #[cfg(not(windows))]
+        {
+            self.show_admin_slow_warning = false;
+        }
         let (tx, rx) = mpsc::channel();
         self.scan_rx = Some(rx);
 
@@ -190,6 +209,7 @@ impl App {
                             self.tree = Some(tree);
                             self.navigation = Some(NavigationState::new(root));
                             self.phase = AppPhase::Ready;
+                            self.loading_started = None;
                             self.needs_relayout = true;
                             self.scan_rx = None;
                             return true;
@@ -206,19 +226,27 @@ impl App {
     /// Force a recomputation of the layout for the current viewport.
     pub fn relayout(&mut self) {
         if let (Some(tree), Some(nav)) = (&self.tree, &self.navigation) {
+            let [tx, ty, tw, th] = self.treemap_layout_rect();
+            let exclusion = self.sidebar_exclusion_rect();
             tracing::info!(
-                "Computing layout for tree with {} nodes, root={:?}, viewport={}x{}",
+                "Computing layout for tree with {} nodes, root={:?}, viewport={}x{}, treemap={}x{}@{},{} exclusion={:?}",
                 tree.len(),
                 nav.current_root,
                 self.viewport_width,
-                self.viewport_height
+                self.viewport_height,
+                tw,
+                th,
+                tx,
+                ty,
+                exclusion
             );
 
-            let computed_layout = layout::compute_layout(
+            let computed_layout = layout::compute_layout_lshape(
                 tree,
                 nav.current_root,
                 self.viewport_width,
                 self.viewport_height,
+                exclusion,
                 &self.layout_config,
             );
 
@@ -292,6 +320,17 @@ impl App {
             &self.color_settings,
             self.show_hover_info,
         );
+
+        if self.phase == AppPhase::Scanning {
+            crate::ui::overlay::render_loading_overlay(
+                &mut self.scene,
+                &mut self.text_renderer,
+                self.viewport_width,
+                self.viewport_height,
+                self.loading_started.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0),
+                self.show_admin_slow_warning,
+            );
+        }
     }
 
     /// Hit-test interactive folder labels (used for label-only drill-down).
@@ -317,6 +356,29 @@ impl App {
 
     pub fn sidebar_exclusion_rect(&self) -> [f32; 4] {
         crate::ui::overlay::sidebar_panel_bounds(self.viewport_height, self.available_drives.len())
+    }
+
+    /// Compute the rectangle available for treemap layout after reserving sidebar space.
+    pub fn treemap_layout_rect(&self) -> [f32; 4] {
+        let [_sx1, sy1, sx2, sy2] = self.sidebar_exclusion_rect();
+        let pad = 8.0;
+        let right_x = (sx2 + pad).min(self.viewport_width);
+        let right_w = (self.viewport_width - right_x).max(64.0);
+        let right_h = self.viewport_height.max(64.0);
+
+        let bottom_y = (sy2 + pad).min(self.viewport_height);
+        let bottom_w = self.viewport_width.max(64.0);
+        let bottom_h = (self.viewport_height - bottom_y).max(64.0);
+
+        // Prefer reclaiming space below the compact sidebar so we avoid a full-height dead strip.
+        let panel_h = (sy2 - sy1).max(0.0);
+        if panel_h <= self.viewport_height * 0.75 && bottom_h >= 120.0 {
+            [0.0, bottom_y, bottom_w, bottom_h]
+        } else if right_w * right_h >= bottom_w * bottom_h {
+            [right_x, 0.0, right_w, right_h]
+        } else {
+            [0.0, bottom_y, bottom_w, bottom_h]
+        }
     }
 
     /// Handle viewport resize.

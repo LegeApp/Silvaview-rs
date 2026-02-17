@@ -16,7 +16,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
 
 use app::App;
 use app::AppPhase;
@@ -216,13 +216,26 @@ impl ApplicationHandler for SilvaViewApp {
                         return;
                     }
 
-                    // Navigation is intentionally label-only: clicking data blocks is reserved
-                    // for future file inspection interactions.
                     if let Some(node) = self.app.hit_test_label(self.app.mouse.x, self.app.mouse.y) {
                         self.app.drill_down(node);
                         self.update_window_title();
                         if let Some(window) = &self.window {
                             window.request_redraw();
+                        }
+                        return;
+                    }
+
+                    // Fallback: allow clicking a directory rectangle to drill down.
+                    // Sidebar hit-testing already returned above, so this only applies to treemap tiles.
+                    if let (Some(layout), Some(tree)) = (&self.app.layout, &self.app.tree) {
+                        if let Some(node) = input::hit_test(&layout.rects, self.app.mouse.x, self.app.mouse.y) {
+                            if tree.get(node).is_dir {
+                                self.app.drill_down(node);
+                                self.update_window_title();
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                            }
                         }
                     }
                     return;
@@ -288,6 +301,14 @@ impl ApplicationHandler for SilvaViewApp {
             }
 
             WindowEvent::RedrawRequested => {
+                if let Some(window) = &self.window {
+                    if self.app.phase == app::AppPhase::Scanning {
+                        window.set_cursor(CursorIcon::Progress);
+                    } else {
+                        window.set_cursor(CursorIcon::Default);
+                    }
+                }
+
                 // Poll for scan completion
                 if self.app.phase == app::AppPhase::Scanning {
                     if self.app.poll_scan() {

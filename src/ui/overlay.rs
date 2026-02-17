@@ -1,4 +1,4 @@
-use vello::kurbo::{Affine, Rect};
+use vello::kurbo::{Affine, Circle, Rect};
 use vello::peniko::{Brush, Color, Fill};
 use vello::Scene;
 
@@ -354,6 +354,72 @@ pub fn render_left_sidebar(
     hits
 }
 
+pub fn render_loading_overlay(
+    scene: &mut Scene,
+    text_renderer: &mut TextRenderer,
+    viewport_width: f32,
+    viewport_height: f32,
+    elapsed_seconds: f32,
+    show_admin_warning: bool,
+) {
+    let panel_w = (viewport_width * 0.54).clamp(420.0, 760.0);
+    let panel_h = if show_admin_warning { 126.0 } else { 92.0 };
+    let x = (viewport_width - panel_w) * 0.5;
+    let y = (viewport_height - panel_h) * 0.5;
+    let panel = Rect::new(x as f64, y as f64, (x + panel_w) as f64, (y + panel_h) as f64);
+
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        &Color::new([0.07, 0.08, 0.10, 0.84]),
+        None,
+        &panel,
+    );
+
+    // Center-justified loading line with spinner directly above it.
+    let text_result =
+        text_renderer.render_text("Loading drive data...", "default", 14.0, Some(panel_w - 32.0));
+    let text_y = if let Some(rendered) = text_result {
+        let tx = x + ((panel_w - rendered.width as f32) * 0.5).max(16.0);
+        let ty = y + 47.0;
+        draw_text(scene, rendered, tx, ty);
+        ty
+    } else {
+        y + 47.0
+    };
+
+    let spinner_cx = x + panel_w * 0.5;
+    let spinner_cy = text_y - 16.0;
+    let spinner_r = 7.0;
+    let step = ((elapsed_seconds * 10.0) as i32).rem_euclid(12) as usize;
+    for i in 0..12usize {
+        let angle = (i as f32 / 12.0) * std::f32::consts::TAU;
+        let px = spinner_cx + angle.cos() * spinner_r;
+        let py = spinner_cy + angle.sin() * spinner_r;
+        let dist = ((12 + i as i32 - step as i32) % 12) as f32;
+        let alpha = (1.0 - dist / 12.0) * 0.9 + 0.08;
+        let dot = Circle::new((px as f64, py as f64), 1.7);
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            &Color::new([0.88, 0.90, 0.95, alpha]),
+            None,
+            &dot,
+        );
+    }
+
+    if show_admin_warning {
+        draw_label_with_width(
+            scene,
+            text_renderer,
+            "Program not started with administrator permissions, loading will be 10x slower.",
+            x + 14.0,
+            text_y + 28.0,
+            panel_w - 32.0,
+        );
+    }
+}
+
 fn draw_text(scene: &mut Scene, text_result: TextRenderResult, x: f32, y: f32) {
     let tx = x.round();
     let ty = y.round();
@@ -375,7 +441,18 @@ fn draw_text(scene: &mut Scene, text_result: TextRenderResult, x: f32, y: f32) {
 }
 
 fn draw_label(scene: &mut Scene, text_renderer: &mut TextRenderer, text: &str, x: f32, y: f32) {
-    if let Some(rendered) = text_renderer.render_text(text, "default", 14.0, Some(210.0)) {
+    draw_label_with_width(scene, text_renderer, text, x, y, 210.0);
+}
+
+fn draw_label_with_width(
+    scene: &mut Scene,
+    text_renderer: &mut TextRenderer,
+    text: &str,
+    x: f32,
+    y: f32,
+    max_width: f32,
+) {
+    if let Some(rendered) = text_renderer.render_text(text, "default", 14.0, Some(max_width)) {
         draw_text(scene, rendered, x, y);
     }
 }
