@@ -44,7 +44,7 @@ SilvaView-rs is a high-performance Rust recreation of the classic disk visualiza
 
 SilvaView-rs is directly inspired by two landmark projects:
 
-1. **SequoiaView / SilvaView** — The original Windows disk space visualizer (late 1990s–early 2000s) that popularized cushion treemaps for everyday users. Its beautiful 3D-like shading made it instantly clear why your hard drive was full.
+1. **SequoiaView** — The original Windows disk space visualizer (late 1990s–early 2000s) that popularized cushion treemaps for everyday users. Its beautiful 3D-like shading made it instantly clear why your hard drive was full.
 
 2. **Cushion Treemaps: Visualization of Hierarchical Information** (INFOVIS'99)  
    by Jarke J. van Wijk and Huub van de Wetering.  
