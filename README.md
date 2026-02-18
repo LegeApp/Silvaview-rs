@@ -6,7 +6,7 @@
 
 **A modern, GPU-accelerated disk space visualizer with authentic cushion treemaps.**
 
-SilvaView-rs is a high-performance Rust recreation of the classic disk visualization experience pioneered by **SequoiaView** and **SilvaView**. It brings the elegant *cushion treemap* algorithm — first introduced in the 1999 INFOVIS paper — to the GPU era with real-time WGSL shading, lightning-fast scanning, and a polished interactive interface.
+SilvaView-rs is a high-performance Rust recreation of the classic disk visualization experience pioneered by **SequoiaView**. It brings the elegant *cushion treemap* algorithm — first introduced in the 1999 INFOVIS paper — to the GPU era with real-time WGSL shading, lightning-fast scanning, and a polished interactive interface.
 
 ---
 
