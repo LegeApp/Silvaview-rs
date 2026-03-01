@@ -6,11 +6,11 @@
 
 **A modern, GPU-accelerated disk space visualizer with authentic cushion treemaps.**
 
-SilvaView-rs is a high-performance Rust recreation of the classic disk visualization experience pioneered by **SequoiaView** and **SilvaView**. It brings the elegant *cushion treemap* algorithm — first introduced in the 1999 INFOVIS paper — to the GPU era with real-time WGSL shading, lightning-fast scanning, and a polished interactive interface.
+SilvaView-rs is a high-performance Rust recreation of the classic disk visualization experience pioneered by **SequoiaView**. It brings the elegant *cushion treemap* algorithm — first introduced in the 1999 INFOVIS paper — to the GPU era with real-time WGSL shading, lightning-fast scanning, and a polished interactive interface.
 
 ---
 
-## ✨ Features
+## Features
 
 ### Core Visualization
 - **Authentic Cushion Treemaps** — Faithful GPU implementation of the 1999 van Wijk & van de Wetering algorithm. Parabolic ridges are accumulated during layout and shaded per-pixel with Lambertian lighting + subtle saturation boost for depth and readability.
@@ -40,11 +40,11 @@ SilvaView-rs is a high-performance Rust recreation of the classic disk visualiza
 
 ---
 
-## 🎨 Influences & Technical Foundations
+## Influences & Technical Foundations
 
 SilvaView-rs is directly inspired by two landmark projects:
 
-1. **SequoiaView / SilvaView** — The original Windows disk space visualizer (late 1990s–early 2000s) that popularized cushion treemaps for everyday users. Its beautiful 3D-like shading made it instantly clear why your hard drive was full.
+1. **SequoiaView** — The original Windows disk space visualizer (late 1990s–early 2000s) that popularized cushion treemaps for everyday users. Its beautiful 3D-like shading made it instantly clear why your hard drive was full.
 
 2. **Cushion Treemaps: Visualization of Hierarchical Information** (INFOVIS'99)  
    by Jarke J. van Wijk and Huub van de Wetering.  
@@ -60,7 +60,7 @@ The result is the most faithful digital revival of the original cushion treemap 
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Build
 
@@ -82,7 +82,7 @@ cargo run --release -- "/home/user/Projects"
 
 ---
 
-## 📖 Usage
+## Usage
 
 - **Left sidebar** — Click any drive to rescan instantly.
 - **Color controls** — Click the color-mode button or drag the vibrancy slider.
@@ -93,7 +93,7 @@ cargo run --release -- "/home/user/Projects"
 
 ---
 
-## 🏗️ Architecture Highlights
+## Architecture Highlights
 
 - `src/scanner/` — MFT + jwalk hybrid scanner with progress channels
 - `src/tree/arena.rs` — Memory-efficient flat arena with sibling lists
@@ -106,7 +106,7 @@ All rendering happens on the GPU; the CPU only builds the layout once per view c
 
 ---
 
-## 📈 Performance
+## Performance
 
 - Scans a 2 TB drive with 1.2 M files in **~8 seconds** (MFT mode) vs **~90 seconds** (jwalk).
 - 60 fps interaction even on trees with 500 k+ nodes.
@@ -114,7 +114,7 @@ All rendering happens on the GPU; the CPU only builds the layout once per view c
 
 ---
 
-## 📜 Project Status
+## Project Status
 
 **Phase 3 complete** (as of v0.3.0):
 - Full cushion GPU pipeline
@@ -130,9 +130,9 @@ Future ideas (PRs welcome):
 
 ---
 
-## ❤️ Credits & References
+## Credits & References
 
-- **Original inspiration**: SequoiaView & SilvaView by the van Wijk / van de Wetering team
+- **Original inspiration**: SequoiaView by the van Wijk / van de Wetering team
 - **Cushion Treemaps algorithm**: [“Cushion Treemaps: Visualization of Hierarchical Information” (INFOVIS'99)](ctm.txt) — included in the repository for reference
 - **Rust ecosystem**: vello, wgpu, winit, jwalk, ntfs, skrifa, iced, rfd, and many more
 
