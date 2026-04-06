@@ -89,7 +89,8 @@ impl RenderState {
         )?;
 
         // Vello always renders to an Rgba8Unorm storage image; then we blit to swapchain format.
-        let scene_target = create_scene_target(&device, surface_config.width, surface_config.height);
+        let scene_target =
+            create_scene_target(&device, surface_config.width, surface_config.height);
         let scene_target_view = scene_target.create_view(&wgpu::TextureViewDescriptor::default());
         let blitter = wgpu::util::TextureBlitter::new(&device, format);
 
@@ -118,8 +119,11 @@ impl RenderState {
         self.surface_config.width = width.max(1);
         self.surface_config.height = height.max(1);
         self.surface.configure(&self.device, &self.surface_config);
-        self.scene_target =
-            create_scene_target(&self.device, self.surface_config.width, self.surface_config.height);
+        self.scene_target = create_scene_target(
+            &self.device,
+            self.surface_config.width,
+            self.surface_config.height,
+        );
         self.scene_target_view = self
             .scene_target
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -143,16 +147,15 @@ impl RenderState {
         color_settings: &ColorSettings,
         exclusion_rect: [f32; 4],
     ) {
-        self.cushion_gpu
-            .update_and_render(
-                &self.device,
-                &self.queue,
-                layout_rects,
-                tree,
-                config,
-                color_settings,
-                exclusion_rect,
-            );
+        self.cushion_gpu.update_and_render(
+            &self.device,
+            &self.queue,
+            layout_rects,
+            tree,
+            config,
+            color_settings,
+            exclusion_rect,
+        );
     }
 
     /// Render a scene to the surface.
@@ -184,8 +187,12 @@ impl RenderState {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("present blit encoder"),
             });
-        self.blitter
-            .copy(&self.device, &mut encoder, &self.scene_target_view, &surface_view);
+        self.blitter.copy(
+            &self.device,
+            &mut encoder,
+            &self.scene_target_view,
+            &surface_view,
+        );
         self.queue.submit(Some(encoder.finish()));
 
         surface_texture.present();

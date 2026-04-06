@@ -8,7 +8,8 @@ use std::sync::mpsc;
 
 use anyhow::Result;
 
-use self::types::{RawFileEntry, ScanProgress};
+use self::types::ScanProgress;
+use crate::tree::arena::FileTree;
 
 /// The scanning strategy to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,22 +27,58 @@ pub fn scan(
     path: &Path,
     method: ScanMethod,
     progress_tx: mpsc::Sender<ScanProgress>,
-) -> Result<Vec<RawFileEntry>> {
+) -> Result<FileTree> {
     match method {
         ScanMethod::Mft => {
+            anyhow::ensure!(
+                is_drive_root(path),
+                "MFT scanning requires a drive root path like D:\\"
+            );
             let drive_letter = extract_drive_letter(path)?;
             mft::scan_mft(drive_letter, progress_tx)
         }
-        ScanMethod::WalkDir => walk::scan_walkdir(path, progress_tx),
+        ScanMethod::WalkDir => {
+            let entries = walk::scan_walkdir(path, progress_tx)?;
+            Ok(crate::tree::build_tree(&entries))
+        }
         ScanMethod::Auto => {
-            if let Some(letter) = try_extract_drive_letter(path) {
-                if mft::is_mft_available(letter) {
-                    return mft::scan_mft(letter, progress_tx);
+            if is_drive_root(path) {
+                if let Some(letter) = try_extract_drive_letter(path) {
+                    if mft::is_mft_available(letter) {
+                        match mft::scan_mft(letter, progress_tx.clone()) {
+                            Ok(tree) => return Ok(tree),
+                            Err(err) => {
+                                tracing::warn!(
+                                    "MFT scan failed for {}:, falling back to walk scan: {}",
+                                    letter,
+                                    err
+                                );
+                            }
+                        }
+                    }
                 }
             }
-            walk::scan_walkdir(path, progress_tx)
+            let entries = walk::scan_walkdir(path, progress_tx)?;
+            Ok(crate::tree::build_tree(&entries))
         }
     }
+}
+
+fn is_drive_root(path: &Path) -> bool {
+    let Some(s) = path.to_str() else {
+        return false;
+    };
+
+    let mut chars = s.chars();
+    let Some(letter) = chars.next() else {
+        return false;
+    };
+
+    if !letter.is_ascii_alphabetic() || chars.next() != Some(':') {
+        return false;
+    }
+
+    matches!(chars.next(), Some('\\') | Some('/')) && chars.next().is_none()
 }
 
 fn extract_drive_letter(path: &Path) -> Result<char> {

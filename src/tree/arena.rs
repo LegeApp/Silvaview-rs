@@ -1,4 +1,7 @@
 use compact_str::CompactString;
+use std::path::PathBuf;
+
+use crate::tree::extensions::{category_index, FileCategory, CATEGORY_COUNT};
 
 /// Index into the arena `Vec<FileNode>`. Uses u32 to save memory (supports up to ~4 billion nodes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,6 +27,8 @@ pub struct FileNode {
     pub is_dir: bool,
     /// Index into the global extension table (0 = no extension / directory)
     pub extension_id: u16,
+    /// File type classification used for coloring and aggregation.
+    pub category: FileCategory,
     /// Parent node index (None for root)
     pub parent: Option<NodeId>,
     /// First child node index (None for files / empty dirs)
@@ -40,18 +45,23 @@ pub struct FileTree {
     pub nodes: Vec<FileNode>,
     /// Root node index
     pub root: NodeId,
+    /// Absolute filesystem path represented by the root node.
+    pub root_path: PathBuf,
     /// Deduplicated extension table: index → extension string (e.g., "pdf", "rs", "exe")
     pub extensions: Vec<CompactString>,
+    /// Aggregated file category weights for each node.
+    pub category_weights: Vec<[u64; CATEGORY_COUNT]>,
 }
 
 impl FileTree {
     /// Create an empty tree with a root node.
-    pub fn new(root_name: &str) -> Self {
+    pub fn new(root_name: &str, root_path: PathBuf) -> Self {
         let root_node = FileNode {
             name: CompactString::new(root_name),
             size: 0,
             is_dir: true,
             extension_id: 0,
+            category: FileCategory::Misc,
             parent: None,
             first_child: None,
             next_sibling: None,
@@ -61,13 +71,18 @@ impl FileTree {
         FileTree {
             nodes: vec![root_node],
             root: NodeId(0),
+            root_path,
             extensions: vec![CompactString::new("")], // index 0 = no extension
+            category_weights: vec![[0; CATEGORY_COUNT]],
         }
     }
 
     /// Add a child node under the given parent. Returns the new node's ID.
     pub fn add_child(&mut self, parent: NodeId, mut node: FileNode) -> NodeId {
         let new_id = NodeId(self.nodes.len() as u32);
+        let node_size = node.size;
+        let is_dir = node.is_dir;
+        let category = node.category;
         node.parent = Some(parent);
         node.depth = self.nodes[parent.index()].depth + 1;
 
@@ -76,6 +91,11 @@ impl FileTree {
         self.nodes[parent.index()].first_child = Some(new_id);
 
         self.nodes.push(node);
+        let mut weights = [0; CATEGORY_COUNT];
+        if !is_dir && node_size > 0 {
+            weights[category_index(category)] = node_size;
+        }
+        self.category_weights.push(weights);
         new_id
     }
 

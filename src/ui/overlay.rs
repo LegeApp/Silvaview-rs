@@ -7,7 +7,7 @@ use crate::render::text::{TextRenderResult, TextRenderer};
 use crate::tree::arena::{FileTree, NodeId};
 use crate::tree::extensions::FileCategory;
 use crate::ui::drives::DriveEntry;
-use crate::ui::tooltip;
+use crate::ui::tooltip::{self, SelectionInfo};
 
 /// Analytics data for the file type breakdown panel.
 #[derive(Debug, Default)]
@@ -26,6 +26,7 @@ pub enum SidebarHitId {
     VibrancyUp,
     VibrancyTrack,
     ToggleHoverInfo,
+    CopyPath,
 }
 
 #[derive(Debug, Clone)]
@@ -56,17 +57,7 @@ pub fn compute_analytics(tree: &FileTree, root: NodeId) -> Analytics {
         let node = tree.get(node_id);
 
         if !node.is_dir {
-            // It's a file - categorize it
-            let ext = if node.extension_id > 0 {
-                tree.extensions
-                    .get(node.extension_id as usize)
-                    .map(|s| s.as_str())
-                    .unwrap_or("")
-            } else {
-                ""
-            };
-            let category = crate::tree::extensions::categorize_extension(ext);
-            *category_map.entry(category).or_insert(0u64) += node.size;
+            *category_map.entry(node.category).or_insert(0u64) += node.size;
             total_size += node.size;
         }
 
@@ -136,13 +127,7 @@ pub fn render_analytics_panel(
         );
         let color = crate::render::colors::category_color(*category);
         let bar_brush = Brush::Solid(color.to_peniko());
-        scene.fill(
-            Fill::NonZero,
-            Affine::IDENTITY,
-            &bar_brush,
-            None,
-            &bar_rect,
-        );
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &bar_brush, None, &bar_rect);
     }
 }
 
@@ -154,7 +139,7 @@ pub fn render_tooltip(
     mouse_x: f32,
     mouse_y: f32,
 ) {
-    let info = tooltip::build_tooltip(tree, node_id);
+    let _info = tooltip::build_tooltip(tree, node_id);
 
     // Tooltip background
     let tooltip_width = 300.0;
@@ -220,6 +205,8 @@ pub fn render_left_sidebar(
     selected_scan_path: &std::path::Path,
     color_settings: &ColorSettings,
     show_hover_info: bool,
+    path_preview: Option<&str>,
+    path_copy_enabled: bool,
 ) -> Vec<SidebarHitRegion> {
     let [x1, y1, x2, y2] = sidebar_panel_bounds(viewport_height, drives.len());
     let visible_drives = drives.len().min(12);
@@ -253,7 +240,15 @@ pub fn render_left_sidebar(
         };
         let r = Rect::new(bx1 as f64, by1 as f64, bx2 as f64, by2 as f64);
         scene.fill(Fill::NonZero, Affine::IDENTITY, &fill, None, &r);
-        draw_label_centered(scene, text_renderer, &drive.label, bx1 + 8.0, by1, 14.0, row_h);
+        draw_label_centered(
+            scene,
+            text_renderer,
+            &drive.label,
+            bx1 + 8.0,
+            by1,
+            14.0,
+            row_h,
+        );
         hits.push(SidebarHitRegion {
             id: SidebarHitId::SelectDrive(drive.path.clone()),
             bounds: [bx1, by1, bx2, by2],
@@ -288,7 +283,12 @@ pub fn render_left_sidebar(
     let minus = Rect::new(10.0, y as f64, 42.0, (y + 26.0) as f64);
     let plus = Rect::new((x2 - 42.0) as f64, y as f64, x2 as f64, (y + 26.0) as f64);
     let track = [50.0_f32, y, x2 - 50.0, y + 26.0];
-    let track_rect = Rect::new(track[0] as f64, track[1] as f64, track[2] as f64, track[3] as f64);
+    let track_rect = Rect::new(
+        track[0] as f64,
+        track[1] as f64,
+        track[2] as f64,
+        track[3] as f64,
+    );
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
@@ -312,7 +312,12 @@ pub fn render_left_sidebar(
     );
     let t = ((color_settings.vibrancy - 0.6) / (2.0 - 0.6)).clamp(0.0, 1.0);
     let thumb_x = track[0] + (track[2] - track[0]) * t;
-    let thumb = Rect::new((thumb_x - 4.0) as f64, (y + 2.0) as f64, (thumb_x + 4.0) as f64, (y + 24.0) as f64);
+    let thumb = Rect::new(
+        (thumb_x - 4.0) as f64,
+        (y + 2.0) as f64,
+        (thumb_x + 4.0) as f64,
+        (y + 24.0) as f64,
+    );
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
@@ -344,11 +349,48 @@ pub fn render_left_sidebar(
         None,
         &hover_r,
     );
-    let hover_text = if show_hover_info { "Hover Info: On" } else { "Hover Info: Off" };
+    let hover_text = if show_hover_info {
+        "Hover Info: On"
+    } else {
+        "Hover Info: Off"
+    };
     draw_label(scene, text_renderer, hover_text, 18.0, y + 7.0);
     hits.push(SidebarHitRegion {
         id: SidebarHitId::ToggleHoverInfo,
         bounds: [10.0, y, x2 - 10.0, y + 28.0],
+    });
+    y += 38.0;
+
+    let path_section = if path_copy_enabled {
+        "Path (Locked)"
+    } else {
+        "Path (Hover)"
+    };
+    draw_label(scene, text_renderer, path_section, 14.0, y);
+    y += 18.0;
+
+    let path_box_h = 34.0;
+    let path_r = Rect::new(10.0, y as f64, (x2 - 10.0) as f64, (y + path_box_h) as f64);
+    let path_fill = if path_copy_enabled {
+        Color::new([0.18, 0.22, 0.30, 0.86])
+    } else {
+        Color::new([0.14, 0.15, 0.18, 0.72])
+    };
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &path_fill, None, &path_r);
+    let path_text = path_preview.unwrap_or("Hover over a file or folder");
+    let icon_x = x2 - 27.0;
+    draw_copy_icon(scene, icon_x, y + 8.0, path_copy_enabled, &path_fill);
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        path_text,
+        16.0,
+        y + 9.0,
+        (x2 - 10.0) - 16.0 - 24.0,
+    );
+    hits.push(SidebarHitRegion {
+        id: SidebarHitId::CopyPath,
+        bounds: [10.0, y, x2 - 10.0, y + path_box_h],
     });
 
     hits
@@ -366,7 +408,12 @@ pub fn render_loading_overlay(
     let panel_h = if show_admin_warning { 126.0 } else { 92.0 };
     let x = (viewport_width - panel_w) * 0.5;
     let y = (viewport_height - panel_h) * 0.5;
-    let panel = Rect::new(x as f64, y as f64, (x + panel_w) as f64, (y + panel_h) as f64);
+    let panel = Rect::new(
+        x as f64,
+        y as f64,
+        (x + panel_w) as f64,
+        (y + panel_h) as f64,
+    );
 
     scene.fill(
         Fill::NonZero,
@@ -377,8 +424,12 @@ pub fn render_loading_overlay(
     );
 
     // Center-justified loading line with spinner directly above it.
-    let text_result =
-        text_renderer.render_text("Loading drive data...", "default", 14.0, Some(panel_w - 32.0));
+    let text_result = text_renderer.render_text(
+        "Loading drive data...",
+        "default",
+        14.0,
+        Some(panel_w - 32.0),
+    );
     let text_y = if let Some(rendered) = text_result {
         let tx = x + ((panel_w - rendered.width as f32) * 0.5).max(16.0);
         let ty = y + 47.0;
@@ -420,6 +471,126 @@ pub fn render_loading_overlay(
     }
 }
 
+pub fn render_selection_popup(
+    scene: &mut Scene,
+    text_renderer: &mut TextRenderer,
+    info: &SelectionInfo,
+    anchor: [f32; 2],
+    viewport_width: f32,
+    viewport_height: f32,
+) -> [f32; 4] {
+    let panel_w = (viewport_width * 0.30).clamp(300.0, 420.0);
+    let mut panel_h = 150.0;
+    if info.child_count.is_some() {
+        panel_h += 18.0;
+    }
+    let cursor_offset = 18.0;
+    let panel_x = if anchor[0] + panel_w + cursor_offset <= viewport_width - 12.0 {
+        anchor[0] + cursor_offset
+    } else {
+        (anchor[0] - panel_w - cursor_offset).max(212.0)
+    };
+    let panel_y = (anchor[1] + 14.0).clamp(12.0, viewport_height - panel_h - 12.0);
+    let panel = Rect::new(
+        panel_x as f64,
+        panel_y as f64,
+        (panel_x + panel_w) as f64,
+        (panel_y + panel_h) as f64,
+    );
+
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        &Color::new([0.05, 0.07, 0.09, 0.92]),
+        None,
+        &panel,
+    );
+
+    let accent = Rect::new(
+        panel_x as f64,
+        panel_y as f64,
+        (panel_x + 4.0) as f64,
+        (panel_y + panel_h) as f64,
+    );
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        &Color::new([0.24, 0.72, 1.0, 0.96]),
+        None,
+        &accent,
+    );
+
+    let title = if info.is_dir {
+        "Selected Folder"
+    } else {
+        "Selected File"
+    };
+    draw_label(scene, text_renderer, title, panel_x + 16.0, panel_y + 14.0);
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        &info.name,
+        panel_x + 16.0,
+        panel_y + 36.0,
+        panel_w - 32.0,
+    );
+
+    let mut y = panel_y + 60.0;
+    let meta = if let Some(child_count) = info.child_count {
+        format!(
+            "{}  |  {}  |  {} items",
+            info.category, info.size_display, child_count
+        )
+    } else {
+        format!("{}  |  {}", info.category, info.size_display)
+    };
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        &meta,
+        panel_x + 16.0,
+        y,
+        panel_w - 32.0,
+    );
+    y += 20.0;
+
+    let modified = format!("Modified: {}", info.modified_display);
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        &modified,
+        panel_x + 16.0,
+        y,
+        panel_w - 32.0,
+    );
+    y += 24.0;
+
+    draw_label(scene, text_renderer, "Directory", panel_x + 16.0, y);
+    y += 16.0;
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        &info.directory_path,
+        panel_x + 16.0,
+        y,
+        panel_w - 32.0,
+    );
+    y += 28.0;
+
+    draw_label(scene, text_renderer, "Path", panel_x + 16.0, y);
+    y += 16.0;
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        &info.full_path,
+        panel_x + 16.0,
+        y,
+        panel_w - 32.0,
+    );
+
+    [panel_x, panel_y, panel_x + panel_w, panel_y + panel_h]
+}
+
 fn draw_text(scene: &mut Scene, text_result: TextRenderResult, x: f32, y: f32) {
     let tx = x.round();
     let ty = y.round();
@@ -459,8 +630,8 @@ fn draw_label_with_width(
 
 fn sidebar_height(visible_drives: usize) -> f32 {
     let drives_h = visible_drives as f32 * (26.0 + 6.0);
-    // Header + section padding + appearance controls.
-    14.0 + 22.0 + drives_h + 8.0 + 24.0 + 38.0 + 18.0 + 36.0 + 36.0 + 8.0
+    // Header + section padding + appearance controls + hover/path panels.
+    14.0 + 22.0 + drives_h + 8.0 + 24.0 + 38.0 + 18.0 + 36.0 + 36.0 + 38.0 + 18.0 + 34.0 + 8.0
 }
 
 fn draw_label_centered(
@@ -476,4 +647,30 @@ fn draw_label_centered(
         let y = row_y + ((row_h - rendered.height as f32) * 0.5).max(0.0);
         draw_text(scene, rendered, x, y);
     }
+}
+
+fn draw_copy_icon(scene: &mut Scene, x: f32, y: f32, enabled: bool, background: &Color) {
+    let alpha = if enabled { 0.95 } else { 0.42 };
+    let outline = Color::new([0.86, 0.89, 0.95, alpha]);
+    draw_icon_square(scene, x + 4.0, y + 1.0, 10.0, &outline, background);
+    draw_icon_square(scene, x, y + 5.0, 10.0, &outline, background);
+}
+
+fn draw_icon_square(
+    scene: &mut Scene,
+    x: f32,
+    y: f32,
+    size: f32,
+    outline: &Color,
+    background: &Color,
+) {
+    let outer = Rect::new(x as f64, y as f64, (x + size) as f64, (y + size) as f64);
+    let inner = Rect::new(
+        (x + 1.6) as f64,
+        (y + 1.6) as f64,
+        (x + size - 1.6) as f64,
+        (y + size - 1.6) as f64,
+    );
+    scene.fill(Fill::NonZero, Affine::IDENTITY, outline, None, &outer);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, background, None, &inner);
 }

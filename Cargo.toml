@@ -52,12 +52,18 @@ features = ["derive"]
 [dependencies.pollster]
 version = "0.4"
 
+[dependencies.arboard]
+version = "3"
+
 [dependencies.iced]
 version = "0.13"
 default-features = true
 
 [dependencies.rfd]
 version = "0.15"
+
+[dependencies.chrono]
+version = "0.4"
 
 [dependencies.skrifa]
 version = "0.40"

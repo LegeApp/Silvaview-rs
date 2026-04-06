@@ -30,9 +30,9 @@ pub fn hit_test(layout_rects: &[LayoutRect], x: f32, y: f32) -> Option<NodeId> {
 pub enum InputAction {
     /// Mouse moved to new position
     Hover { x: f32, y: f32 },
-    /// Left click on a node (drill down)
+    /// Left click on a node (selection handled in the event loop)
     DrillDown { node: NodeId },
-    /// Right click or backspace (navigate up)
+    /// Back mouse button, backspace, or escape (navigate up)
     NavigateUp,
     /// Scroll for zoom
     Zoom { delta: f32, x: f32, y: f32 },
@@ -55,7 +55,7 @@ pub fn process_mouse_button(
 
     match button {
         MouseButton::Left => InputAction::None,
-        MouseButton::Back | MouseButton::Right => InputAction::NavigateUp,
+        MouseButton::Back => InputAction::NavigateUp,
         _ => InputAction::None,
     }
 }
@@ -67,9 +67,7 @@ pub fn process_key(key: Key, state: ElementState) -> InputAction {
     }
 
     match key.as_ref() {
-        Key::Named(NamedKey::Backspace) | Key::Named(NamedKey::Escape) => {
-            InputAction::NavigateUp
-        }
+        Key::Named(NamedKey::Backspace) | Key::Named(NamedKey::Escape) => InputAction::NavigateUp,
         _ => InputAction::None,
     }
 }
