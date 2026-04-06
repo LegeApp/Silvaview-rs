@@ -10,6 +10,7 @@ mod ui;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use winit::application::ApplicationHandler;
@@ -29,6 +30,12 @@ struct SilvaViewApp {
     app: App,
     render_state: Option<RenderState>,
     window: Option<Arc<Window>>,
+    last_left_click: Option<LastLeftClick>,
+}
+
+struct LastLeftClick {
+    node: crate::tree::arena::NodeId,
+    at: Instant,
 }
 
 impl SilvaViewApp {
@@ -37,6 +44,7 @@ impl SilvaViewApp {
             app: App::new(scan_path),
             render_state: None,
             window: None,
+            last_left_click: None,
         }
     }
 
@@ -50,6 +58,17 @@ impl SilvaViewApp {
         } else {
             window.set_title("SilvaView-rs — Disk Space Visualizer");
         }
+    }
+
+    fn left_click_node(&mut self, node: crate::tree::arena::NodeId) -> bool {
+        let now = Instant::now();
+        let is_double = self
+            .last_left_click
+            .as_ref()
+            .map(|last| last.node == node && now.duration_since(last.at).as_millis() <= 450)
+            .unwrap_or(false);
+        self.last_left_click = Some(LastLeftClick { node, at: now });
+        is_double
     }
 }
 
@@ -142,11 +161,7 @@ impl ApplicationHandler for SilvaViewApp {
 
                 // Update hover state
                 let new_hover = if let Some(layout) = &self.app.layout {
-                    input::hit_test(
-                        &layout.rects,
-                        self.app.mouse.x,
-                        self.app.mouse.y,
-                    )
+                    input::hit_test(&layout.rects, self.app.mouse.x, self.app.mouse.y)
                 } else {
                     None
                 };
@@ -167,7 +182,24 @@ impl ApplicationHandler for SilvaViewApp {
                 }
 
                 if state == ElementState::Pressed && button == winit::event::MouseButton::Left {
-                    if let Some(hit) = self.app.hit_test_sidebar(self.app.mouse.x, self.app.mouse.y) {
+                    if let Some([x1, y1, x2, y2]) = self.app.selected_popup_bounds {
+                        if self.app.mouse.x >= x1
+                            && self.app.mouse.x <= x2
+                            && self.app.mouse.y >= y1
+                            && self.app.mouse.y <= y2
+                        {
+                            self.app.clear_selection();
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                            return;
+                        }
+                    }
+
+                    if let Some(hit) = self
+                        .app
+                        .hit_test_sidebar(self.app.mouse.x, self.app.mouse.y)
+                    {
                         match hit {
                             SidebarHitId::SelectDrive(path) => {
                                 self.app.start_scan_path(path);
@@ -201,7 +233,10 @@ impl ApplicationHandler for SilvaViewApp {
                                     .map(|r| r.bounds)
                                 {
                                     self.app.color_settings.vibrancy =
-                                        ui::overlay::vibrancy_value_from_track_x(self.app.mouse.x, track);
+                                        ui::overlay::vibrancy_value_from_track_x(
+                                            self.app.mouse.x,
+                                            track,
+                                        );
                                     self.app.vibrancy_dragging = true;
                                     self.app.needs_relayout = true;
                                 }
@@ -209,45 +244,75 @@ impl ApplicationHandler for SilvaViewApp {
                             SidebarHitId::ToggleHoverInfo => {
                                 self.app.show_hover_info = !self.app.show_hover_info;
                             }
-                        }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
-                        return;
-                    }
-
-                    if let Some(node) = self.app.hit_test_label(self.app.mouse.x, self.app.mouse.y) {
-                        self.app.drill_down(node);
-                        self.update_window_title();
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
-                        return;
-                    }
-
-                    // Fallback: allow clicking a directory rectangle to drill down.
-                    // Sidebar hit-testing already returned above, so this only applies to treemap tiles.
-                    if let (Some(layout), Some(tree)) = (&self.app.layout, &self.app.tree) {
-                        if let Some(node) = input::hit_test(&layout.rects, self.app.mouse.x, self.app.mouse.y) {
-                            if tree.get(node).is_dir {
-                                self.app.drill_down(node);
-                                self.update_window_title();
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
+                            SidebarHitId::CopyPath => {
+                                if self.app.copy_locked_path_to_clipboard() {
+                                    tracing::info!("Copied locked path to clipboard");
                                 }
                             }
                         }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                        return;
+                    }
+
+                    let clicked_node = self
+                        .app
+                        .hit_test_label(self.app.mouse.x, self.app.mouse.y)
+                        .or_else(|| {
+                            self.app.layout.as_ref().and_then(|layout| {
+                                input::hit_test(&layout.rects, self.app.mouse.x, self.app.mouse.y)
+                            })
+                        });
+
+                    if let Some(node) = clicked_node {
+                        let is_dir = self
+                            .app
+                            .tree
+                            .as_ref()
+                            .map(|tree| tree.get(node).is_dir)
+                            .unwrap_or(false);
+                        let is_double = self.left_click_node(node);
+
+                        if is_double {
+                            if is_dir {
+                                self.app.clear_selection();
+                                self.app.drill_down(node);
+                                self.update_window_title();
+                            } else if !self.app.open_selected_in_file_manager() {
+                                tracing::warn!(
+                                    "Failed to open containing directory for selected file"
+                                );
+                            }
+                        } else if is_dir {
+                            self.app.clear_selection();
+                        } else {
+                            self.app
+                                .select_file_node(node, [self.app.mouse.x, self.app.mouse.y]);
+                        }
+                    } else {
+                        self.app.clear_selection();
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+
+                if state == ElementState::Pressed && button == winit::event::MouseButton::Right {
+                    if self.app.copy_locked_path_to_clipboard() {
+                        tracing::info!("Copied selected path to clipboard");
+                    } else {
+                        self.handle_action(input::InputAction::NavigateUp);
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
                     }
                     return;
                 }
 
                 let action = if let Some(layout) = &self.app.layout {
-                    input::process_mouse_button(
-                        button,
-                        state,
-                        &self.app.mouse,
-                        &layout.rects,
-                    )
+                    input::process_mouse_button(button, state, &self.app.mouse, &layout.rects)
                 } else {
                     input::InputAction::None
                 };
@@ -415,7 +480,11 @@ fn main() -> Result<()> {
 
     // Check for admin privileges if scanning a drive root
     #[cfg(windows)]
-    if scan_path.to_str().map(|s| s.ends_with(":\\")).unwrap_or(false) {
+    if scan_path
+        .to_str()
+        .map(|s| s.ends_with(":\\"))
+        .unwrap_or(false)
+    {
         if !scanner::elevation::is_elevated() {
             tracing::warn!("Not running with Administrator privileges. MFT scanning unavailable.");
             tracing::info!("For 10x faster scanning, run with 'Run as Administrator' or the app will auto-prompt.");

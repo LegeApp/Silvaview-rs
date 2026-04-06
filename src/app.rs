@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -16,6 +17,7 @@ use crate::tree::arena::{FileTree, NodeId};
 use crate::ui::input::MouseState;
 use crate::ui::navigation::NavigationState;
 use crate::ui::overlay::{Analytics, SidebarHitId, SidebarHitRegion};
+use crate::ui::tooltip::SelectionInfo;
 
 /// Application state machine phases.
 #[derive(Debug, PartialEq, Eq)]
@@ -49,6 +51,12 @@ pub struct App {
     pub navigation: Option<NavigationState>,
     pub mouse: MouseState,
     pub hover_node: Option<NodeId>,
+    pub selected_node: Option<NodeId>,
+    pub selected_info: Option<SelectionInfo>,
+    pub selected_anchor: Option<[f32; 2]>,
+    pub selected_popup_bounds: Option<[f32; 4]>,
+    pub locked_path: Option<String>,
+    clipboard: Option<arboard::Clipboard>,
     pub analytics: Analytics,
     pub show_analytics_panel: bool,
     pub show_text_labels: bool,
@@ -95,9 +103,15 @@ impl App {
             navigation: None,
             mouse: MouseState::default(),
             hover_node: None,
+            selected_node: None,
+            selected_info: None,
+            selected_anchor: None,
+            selected_popup_bounds: None,
+            locked_path: None,
+            clipboard: None,
             analytics: Analytics::default(),
-            show_analytics_panel: false,  // Keep analytics panel off by default
-            show_text_labels: true,       // Enable constrained labels for orientation
+            show_analytics_panel: false, // Keep analytics panel off by default
+            show_text_labels: true,      // Enable constrained labels for orientation
             label_font_scale: 1.0,
             label_font_path: String::new(),
             label_hit_regions: Vec::new(),
@@ -139,8 +153,7 @@ impl App {
         std::thread::spawn(move || {
             let progress_tx = tx.clone();
             match scanner::scan(&path, scanner::ScanMethod::Auto, progress_tx) {
-                Ok(entries) => {
-                    let tree = crate::tree::build_tree(&entries);
+                Ok(tree) => {
                     tracing::info!("Tree built: {} nodes", tree.len());
                     // Send a final completion signal with the tree
                     // (We'll send the tree via a separate channel in a real impl;
@@ -174,6 +187,11 @@ impl App {
         self.layout = None;
         self.navigation = None;
         self.hover_node = None;
+        self.selected_node = None;
+        self.selected_info = None;
+        self.selected_anchor = None;
+        self.selected_popup_bounds = None;
+        self.locked_path = None;
         self.cached_treemap_image = None;
         self.label_hit_regions.clear();
         self.sidebar_hit_regions.clear();
@@ -250,7 +268,10 @@ impl App {
                 &self.layout_config,
             );
 
-            tracing::info!("Layout computed: {} rectangles generated", computed_layout.rects.len());
+            tracing::info!(
+                "Layout computed: {} rectangles generated",
+                computed_layout.rects.len()
+            );
 
             self.layout = Some(computed_layout);
 
@@ -270,6 +291,7 @@ impl App {
                 &layout.rects,
                 tree,
                 self.hover_node,
+                self.selected_node,
                 &mut self.text_renderer,
                 self.show_text_labels,
                 self.label_font_scale,
@@ -306,11 +328,26 @@ impl App {
             //         self.viewport_width,
             //     );
             // }
+
+            if let Some(info) = &self.selected_info {
+                self.selected_popup_bounds = Some(crate::ui::overlay::render_selection_popup(
+                    &mut self.scene,
+                    &mut self.text_renderer,
+                    info,
+                    self.selected_anchor.unwrap_or([self.mouse.x, self.mouse.y]),
+                    self.viewport_width,
+                    self.viewport_height,
+                ));
+            } else {
+                self.selected_popup_bounds = None;
+            }
         } else {
             self.scene.reset();
             self.label_hit_regions.clear();
+            self.selected_popup_bounds = None;
         }
 
+        let sidebar_path_preview = self.sidebar_path_preview();
         self.sidebar_hit_regions = crate::ui::overlay::render_left_sidebar(
             &mut self.scene,
             &mut self.text_renderer,
@@ -319,6 +356,8 @@ impl App {
             &self.scan_path,
             &self.color_settings,
             self.show_hover_info,
+            sidebar_path_preview.as_deref(),
+            self.locked_path.is_some(),
         );
 
         if self.phase == AppPhase::Scanning {
@@ -327,7 +366,9 @@ impl App {
                 &mut self.text_renderer,
                 self.viewport_width,
                 self.viewport_height,
-                self.loading_started.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0),
+                self.loading_started
+                    .map(|t| t.elapsed().as_secs_f32())
+                    .unwrap_or(0.0),
                 self.show_admin_slow_warning,
             );
         }
@@ -390,20 +431,110 @@ impl App {
 
     /// Handle drill-down navigation.
     pub fn drill_down(&mut self, node: NodeId) {
-        if let (Some(tree), Some(nav)) = (&self.tree, &mut self.navigation) {
-            if nav.drill_down(node, tree) {
-                self.needs_relayout = true;
-            }
+        let did_drill = if let (Some(tree), Some(nav)) = (&self.tree, &mut self.navigation) {
+            nav.drill_down(node, tree)
+        } else {
+            false
+        };
+
+        if did_drill {
+            self.clear_selection();
+            self.needs_relayout = true;
         }
     }
 
     /// Handle navigate-up.
     pub fn navigate_up(&mut self) {
-        if let Some(nav) = &mut self.navigation {
-            if nav.navigate_up() {
-                self.needs_relayout = true;
-            }
+        let did_navigate = if let Some(nav) = &mut self.navigation {
+            nav.navigate_up()
+        } else {
+            false
+        };
+
+        if did_navigate {
+            self.clear_selection();
+            self.needs_relayout = true;
         }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selected_node = None;
+        self.selected_info = None;
+        self.selected_anchor = None;
+        self.selected_popup_bounds = None;
+        self.locked_path = None;
+    }
+
+    pub fn select_file_node(&mut self, node: NodeId, cursor: [f32; 2]) {
+        if let Some(tree) = &self.tree {
+            let info = crate::ui::tooltip::build_selection_info(tree, node);
+            self.locked_path = Some(info.full_path.clone());
+            self.selected_node = Some(node);
+            self.selected_info = Some(info);
+            self.selected_anchor = Some(cursor);
+        }
+    }
+
+    pub fn open_selected_in_file_manager(&self) -> bool {
+        let (Some(tree), Some(node_id)) = (&self.tree, self.selected_node) else {
+            return false;
+        };
+
+        let node = tree.get(node_id);
+        let full_path = crate::ui::tooltip::build_pathbuf(tree, node_id);
+        let directory_path = if node.is_dir {
+            full_path.clone()
+        } else {
+            full_path
+                .parent()
+                .unwrap_or(full_path.as_path())
+                .to_path_buf()
+        };
+
+        open_in_file_manager(&full_path, &directory_path, node.is_dir)
+    }
+
+    pub fn copy_locked_path_to_clipboard(&mut self) -> bool {
+        let Some(path) = self.locked_path.clone() else {
+            return false;
+        };
+
+        // Retrying helps when the OS clipboard is briefly busy.
+        let mut last_err: Option<String> = None;
+        for _ in 0..6 {
+            if self.clipboard.is_none() {
+                self.clipboard = arboard::Clipboard::new().ok();
+            }
+
+            if let Some(clipboard) = self.clipboard.as_mut() {
+                match clipboard.set_text(path.clone()) {
+                    Ok(()) => return true,
+                    Err(e) => {
+                        last_err = Some(e.to_string());
+                        self.clipboard = None;
+                    }
+                }
+            } else {
+                last_err = Some("clipboard backend unavailable".to_string());
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(12));
+        }
+
+        if let Some(err) = last_err {
+            tracing::warn!("Failed to copy path to clipboard: {}", err);
+        }
+        false
+    }
+
+    fn sidebar_path_preview(&self) -> Option<String> {
+        if let Some(path) = &self.locked_path {
+            return Some(path.clone());
+        }
+        if let (Some(tree), Some(node)) = (&self.tree, self.hover_node) {
+            return Some(crate::ui::tooltip::build_path(tree, node));
+        }
+        None
     }
 }
 
@@ -412,3 +543,43 @@ impl App {
 use std::sync::Mutex;
 static SCAN_RESULT: std::sync::LazyLock<Mutex<Option<FileTree>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
+
+fn open_in_file_manager(
+    full_path: &std::path::Path,
+    directory_path: &std::path::Path,
+    is_dir: bool,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let status = if is_dir {
+            Command::new("explorer").arg(directory_path).status()
+        } else {
+            let mut select_arg = std::ffi::OsString::from("/select,");
+            select_arg.push(full_path.as_os_str());
+            Command::new("explorer").arg(select_arg).status()
+        };
+        return status.map(|s| s.success()).unwrap_or(false);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = if is_dir {
+            Command::new("open").arg(directory_path).status()
+        } else {
+            Command::new("open").arg("-R").arg(full_path).status()
+        };
+        return status.map(|s| s.success()).unwrap_or(false);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        return Command::new("xdg-open")
+            .arg(directory_path)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+
+    #[allow(unreachable_code)]
+    false
+}

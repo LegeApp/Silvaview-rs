@@ -61,10 +61,10 @@ pub struct LayoutConfig {
 impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
-            min_area: 49.0,       // Avoid tiny visual noise on million-node trees
-            min_side: 6.0,        // Suppress thin strips that are not interactable
+            min_area: 49.0,         // Avoid tiny visual noise on million-node trees
+            min_side: 6.0,          // Suppress thin strips that are not interactable
             recurse_min_side: 28.0, // Recurse only when child rect can show structure
-            padding: 0.0,         // Paper-style treemap has no forced gaps
+            padding: 0.0,           // Paper-style treemap has no forced gaps
             padding_falloff: 1.0,
             dir_frame_px: 2.0,
             dir_header_px: 16.0,
@@ -127,7 +127,10 @@ pub fn compute_layout_lshape(
     node_to_rect.insert(root, 0);
 
     if !tree.get(root).is_dir {
-        return Layout { rects, node_to_rect };
+        return Layout {
+            rects,
+            node_to_rect,
+        };
     }
 
     let pad = 8.0;
@@ -169,7 +172,10 @@ pub fn compute_layout_lshape(
     let parent_node = tree.get(root);
     let parent_size = parent_node.size as f64;
     if parent_size <= 0.0 {
-        return Layout { rects, node_to_rect };
+        return Layout {
+            rects,
+            node_to_rect,
+        };
     }
 
     let total_available_area = regions.iter().map(|r| r.area() as f64).sum::<f64>();
@@ -183,7 +189,10 @@ pub fn compute_layout_lshape(
         &parent_node.name,
     );
     if visible.is_empty() {
-        return Layout { rects, node_to_rect };
+        return Layout {
+            rects,
+            node_to_rect,
+        };
     }
 
     let total_visible_area = visible.iter().map(|(_, a)| *a).sum::<f64>();
@@ -258,7 +267,10 @@ pub fn compute_layout_lshape(
         }
     }
 
-    Layout { rects, node_to_rect }
+    Layout {
+        rects,
+        node_to_rect,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -318,7 +330,10 @@ pub fn compute_layout_in_rect(
         );
     }
 
-    Layout { rects, node_to_rect }
+    Layout {
+        rects,
+        node_to_rect,
+    }
 }
 
 fn collect_visible_children(
@@ -350,7 +365,9 @@ fn collect_visible_children(
         if visible.len() >= config.max_children_per_dir {
             break;
         }
-        let keep = idx == 0 || visible.len() < 8 || (covered_area / total_area) < config.child_coverage_target;
+        let keep = idx == 0
+            || visible.len() < 8
+            || (covered_area / total_area) < config.child_coverage_target;
         if !keep {
             break;
         }
@@ -514,7 +531,9 @@ fn layout_children(
 
     // Chain-compression: if one directory dominates almost all bytes of this parent,
     // recurse directly into it using the full parent rectangle to avoid barcode-like strips.
-    if let Some((dom_child, dom_ratio, sibling_ratio)) = dominant_dir_child(tree, parent, parent_size) {
+    if let Some((dom_child, dom_ratio, sibling_ratio)) =
+        dominant_dir_child(tree, parent, parent_size)
+    {
         if dom_ratio >= 0.98 && sibling_ratio <= 0.02 {
             let (dom_child, collapsed_levels) = collapse_single_dir_chain(tree, dom_child);
             let child_depth = depth
@@ -582,7 +601,8 @@ fn layout_children(
     // Keep only the most important children for this level.
     // This intentionally trades tiny-detail fidelity for readability and performance,
     // while preserving visual coverage by redistributing the omitted tail.
-    let mut visible: Vec<(NodeId, f64)> = Vec::with_capacity(items.len().min(config.max_children_per_dir));
+    let mut visible: Vec<(NodeId, f64)> =
+        Vec::with_capacity(items.len().min(config.max_children_per_dir));
     let mut covered_area = 0.0_f64;
     for (idx, item) in items.iter().enumerate() {
         if visible.len() >= config.max_children_per_dir {
@@ -640,7 +660,13 @@ fn layout_children(
     let areas: Vec<f64> = visible.iter().map(|&(_, area)| area).collect();
 
     // Squarified layout
-    let positioned = squarify(&areas, inner_x as f64, inner_y as f64, inner_w as f64, inner_h as f64);
+    let positioned = squarify(
+        &areas,
+        inner_x as f64,
+        inner_y as f64,
+        inner_w as f64,
+        inner_h as f64,
+    );
 
     for (i, pos) in positioned.iter().enumerate() {
         let mut child_id = visible[i].0;
@@ -685,7 +711,10 @@ fn layout_children(
         node_to_rect.insert(child_id, idx);
 
         // Recurse only into directories
-        if tree.get(child_id).is_dir && cw >= config.recurse_min_side && ch >= config.recurse_min_side {
+        if tree.get(child_id).is_dir
+            && cw >= config.recurse_min_side
+            && ch >= config.recurse_min_side
+        {
             layout_children(
                 tree,
                 child_id,
@@ -704,7 +733,11 @@ fn layout_children(
     }
 }
 
-fn dominant_dir_child(tree: &FileTree, parent: NodeId, parent_size: f64) -> Option<(NodeId, f64, f64)> {
+fn dominant_dir_child(
+    tree: &FileTree,
+    parent: NodeId,
+    parent_size: f64,
+) -> Option<(NodeId, f64, f64)> {
     if parent_size <= 0.0 {
         return None;
     }
