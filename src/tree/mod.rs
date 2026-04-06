@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use compact_str::CompactString;
 
 use self::arena::{FileNode, FileTree, NodeId};
+use self::extensions::FileCategory;
 use crate::scanner::types::RawFileEntry;
 
 /// Find the common root path for all entries.
@@ -27,9 +28,7 @@ fn find_common_root(entries: &[RawFileEntry]) -> PathBuf {
             let drive_root = PathBuf::from(format!("{}:\\", path_str.chars().next().unwrap()));
 
             // Verify all entries start with this drive root
-            let all_match = entries.iter().all(|e| {
-                e.path.starts_with(&drive_root)
-            });
+            let all_match = entries.iter().all(|e| e.path.starts_with(&drive_root));
 
             if all_match {
                 tracing::info!("Detected drive root scan: {}", drive_root.display());
@@ -40,7 +39,8 @@ fn find_common_root(entries: &[RawFileEntry]) -> PathBuf {
 
     // Fallback: find shortest common path
     let mut root = first_path.clone();
-    for entry in entries.iter().skip(1).take(100) {  // Sample first 100
+    for entry in entries.iter().skip(1).take(100) {
+        // Sample first 100
         while !entry.path.starts_with(&root) {
             match root.parent() {
                 Some(parent) => root = parent.to_path_buf(),
@@ -55,7 +55,7 @@ fn find_common_root(entries: &[RawFileEntry]) -> PathBuf {
 /// Build a FileTree from a flat list of RawFileEntry (from the scanner).
 pub fn build_tree(entries: &[RawFileEntry]) -> FileTree {
     if entries.is_empty() {
-        return FileTree::new("(empty)");
+        return FileTree::new("(empty)", PathBuf::new());
     }
 
     let dir_count = entries.iter().filter(|e| e.is_dir).count();
@@ -93,7 +93,7 @@ pub fn build_tree(entries: &[RawFileEntry]) -> FileTree {
 
     tracing::info!("Root node name will be: '{}'", root_name);
 
-    let mut tree = FileTree::new(&root_name);
+    let mut tree = FileTree::new(&root_name, root_path.clone());
 
     // Map from path → NodeId for parent lookups
     let mut path_map: HashMap<std::path::PathBuf, NodeId> = HashMap::new();
@@ -109,12 +109,13 @@ pub fn build_tree(entries: &[RawFileEntry]) -> FileTree {
 
     // Second pass: create all file nodes
     for entry in entries.iter().filter(|e| !e.is_dir) {
-        let ext = entry
-            .path
-            .extension()
-            .map(|e| e.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let ext_id = tree.intern_extension(&ext);
+        let classification = extensions::classify_path(&entry.path);
+        let ext_id = classification
+            .normalized_extension
+            .as_deref()
+            .map(|ext| tree.intern_extension(ext))
+            .unwrap_or(0);
+        let category = classification.category;
 
         let name = entry
             .path
@@ -122,11 +123,7 @@ pub fn build_tree(entries: &[RawFileEntry]) -> FileTree {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        let parent_path = entry
-            .path
-            .parent()
-            .unwrap_or(Path::new(""))
-            .to_path_buf();
+        let parent_path = entry.path.parent().unwrap_or(Path::new("")).to_path_buf();
         let parent_id = ensure_node(&mut tree, &mut path_map, &parent_path, true, 0);
 
         let node = FileNode {
@@ -134,6 +131,7 @@ pub fn build_tree(entries: &[RawFileEntry]) -> FileTree {
             size: entry.size,
             is_dir: false,
             extension_id: ext_id,
+            category,
             parent: Some(parent_id),
             first_child: None,
             next_sibling: None,
@@ -211,10 +209,7 @@ fn ensure_node(
     // Create each missing ancestor
     let mut last_id = tree.root;
     for ancestor in missing {
-        let parent_path = ancestor
-            .parent()
-            .unwrap_or(Path::new(""))
-            .to_path_buf();
+        let parent_path = ancestor.parent().unwrap_or(Path::new("")).to_path_buf();
 
         let parent_id = path_map.get(&parent_path).copied().unwrap_or(tree.root);
 
@@ -235,6 +230,11 @@ fn ensure_node(
             size: this_size,
             is_dir: is_this_dir,
             extension_id: 0,
+            category: if is_this_dir {
+                FileCategory::Misc
+            } else {
+                FileCategory::Misc
+            },
             parent: Some(parent_id),
             first_child: None,
             next_sibling: None,

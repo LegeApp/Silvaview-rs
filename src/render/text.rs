@@ -36,7 +36,9 @@ impl TextRenderer {
         candidates.push(PathBuf::from("C:\\Windows\\Fonts\\arial.ttf"));
         candidates.push(PathBuf::from("/mnt/c/Windows/Fonts/segoeui.ttf"));
         candidates.push(PathBuf::from("/mnt/c/Windows/Fonts/arial.ttf"));
-        candidates.push(PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"));
+        candidates.push(PathBuf::from(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ));
         candidates.push(PathBuf::from("/usr/share/fonts/TTF/DejaVuSans.ttf"));
 
         for path in candidates {

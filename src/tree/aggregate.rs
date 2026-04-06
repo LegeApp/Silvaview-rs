@@ -1,4 +1,5 @@
 use super::arena::{FileTree, NodeId};
+use super::extensions::CATEGORY_COUNT;
 
 /// Compute aggregated sizes for all directory nodes (bottom-up).
 /// After this, each directory's `size` field equals the sum of all descendant file sizes.
@@ -15,12 +16,18 @@ pub fn aggregate_sizes(tree: &mut FileTree) {
 
         // Sum up all direct children
         let mut total: u64 = 0;
+        let mut weights = [0_u64; CATEGORY_COUNT];
         let mut child = node.first_child;
         while let Some(child_id) = child {
             total += tree.nodes[child_id.index()].size;
+            let child_weights = tree.category_weights[child_id.index()];
+            for idx in 0..CATEGORY_COUNT {
+                weights[idx] += child_weights[idx];
+            }
             child = tree.nodes[child_id.index()].next_sibling;
         }
         tree.nodes[i].size = total;
+        tree.category_weights[i] = weights;
     }
 }
 
@@ -43,11 +50,7 @@ pub fn sort_children_by_size(tree: &mut FileTree) {
         }
 
         // Sort by size descending
-        children.sort_by(|a, b| {
-            tree.nodes[b.index()]
-                .size
-                .cmp(&tree.nodes[a.index()].size)
-        });
+        children.sort_by(|a, b| tree.nodes[b.index()].size.cmp(&tree.nodes[a.index()].size));
 
         // Re-link the sibling list
         if children.is_empty() {
