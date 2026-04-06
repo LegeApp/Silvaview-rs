@@ -1,12 +1,19 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::mem;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use anyhow::{Context, Result};
+use compact_str::CompactString;
 
-use super::types::{RawFileEntry, ScanProgress};
+use super::types::ScanProgress;
+use crate::tree::aggregate;
+use crate::tree::arena::{FileNode, FileTree, NodeId};
+use crate::tree::extensions::{self, FileCategory};
 
+#[cfg(windows)]
+use windows::core::PCWSTR;
 #[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 #[cfg(windows)]
@@ -15,11 +22,9 @@ use windows::Win32::Storage::FileSystem::{
     FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 #[cfg(windows)]
-use windows::Win32::System::IO::DeviceIoControl;
-#[cfg(windows)]
 use windows::Win32::System::Ioctl::FSCTL_GET_NTFS_VOLUME_DATA;
 #[cfg(windows)]
-use windows::core::PCWSTR;
+use windows::Win32::System::IO::DeviceIoControl;
 
 /// NTFS_VOLUME_DATA_BUFFER structure
 #[cfg(windows)]
@@ -61,12 +66,27 @@ const FILENAME_NAMESPACE_POSIX: u8 = 0;
 const FILENAME_NAMESPACE_WIN32: u8 = 1;
 const FILENAME_NAMESPACE_WIN32_AND_DOS: u8 = 3;
 
+const ROOT_RECORD_NUMBER: u64 = 5;
+const UNRESOLVED_BUCKET_NAME: &str = "_Unresolved MFT Entries";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MftReference {
+    record_number: u64,
+    sequence_number: u16,
+}
+
+#[derive(Debug, Clone)]
+struct MftRecordInfo {
+    sequence_number: u16,
+    parent: MftReference,
+    name: String,
+    size: u64,
+    is_dir: bool,
+}
+
 /// Scan an NTFS volume by directly parsing the Master File Table.
 #[cfg(windows)]
-pub fn scan_mft(
-    drive_letter: char,
-    progress_tx: mpsc::Sender<ScanProgress>,
-) -> Result<Vec<RawFileEntry>> {
+pub fn scan_mft(drive_letter: char, progress_tx: mpsc::Sender<ScanProgress>) -> Result<FileTree> {
     use windows::Win32::Foundation::GENERIC_READ;
 
     let volume_path = format!("\\\\.\\{}:", drive_letter);
@@ -78,7 +98,10 @@ pub fn scan_mft(
 
     tracing::info!("Opening NTFS volume: {}", volume_path);
 
-    let wide_path: Vec<u16> = volume_path.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_path: Vec<u16> = volume_path
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     let handle = unsafe {
         CreateFileW(
@@ -110,7 +133,7 @@ fn scan_mft_with_handle(
     handle: HANDLE,
     root_path: PathBuf,
     progress_tx: mpsc::Sender<ScanProgress>,
-) -> Result<Vec<RawFileEntry>> {
+) -> Result<FileTree> {
     let start = std::time::Instant::now();
 
     // Get NTFS volume data to find MFT location
@@ -156,7 +179,12 @@ fn scan_mft_with_handle(
     // The MFT is a file and can be fragmented. We must parse its data runs
     // to know where all the MFT fragments are on disk.
     // ========================================================================
-    let mft_extents = read_mft_extents(handle, mft_start_offset, bytes_per_record, bytes_per_cluster)?;
+    let mft_extents = read_mft_extents(
+        handle,
+        mft_start_offset,
+        bytes_per_record,
+        bytes_per_cluster,
+    )?;
 
     tracing::info!(
         "MFT has {} extents covering {} bytes",
@@ -165,16 +193,15 @@ fn scan_mft_with_handle(
     );
 
     // ========================================================================
-    // PHASE 2: Read all MFT records – single-pass incremental path building
+    // PHASE 2: Read all MFT records into a raw record table.
+    //
+    // We do not build paths incrementally during this pass. NTFS does not
+    // guarantee parent-before-child ordering, so the hierarchy is resolved
+    // only after the full record table is available.
     // ========================================================================
 
-    // Map from MFT record number → resolved path (seeded with root = record 5)
-    let mut record_paths: HashMap<u64, PathBuf> = HashMap::new();
-    record_paths.insert(5, root_path.clone());
-
-    let mut entries: Vec<RawFileEntry> = Vec::new();
-    // Track entries that need $DATA size resolved from extension records
-    let mut needs_size_resolution: HashMap<u64, usize> = HashMap::new();
+    let mut records: HashMap<u64, MftRecordInfo> = HashMap::new();
+    let mut needs_size_resolution: HashSet<u64> = HashSet::new();
 
     let mut files_scanned: u64 = 0;
     let mut dirs_scanned: u64 = 0;
@@ -184,10 +211,6 @@ fn scan_mft_with_handle(
 
     // Storage for ATTRIBUTE_LIST extension record resolution
     let mut base_to_extensions: HashMap<u64, Vec<Vec<u8>>> = HashMap::new();
-
-    // Deferred records: records whose parent path isn't known yet
-    // (parent record number, record number, name, size, is_dir, has_attribute_list)
-    let mut deferred: Vec<(u64, u64, String, u64, bool, bool)> = Vec::new();
 
     let mut global_record_number: u64 = 0;
     let mft_valid_bytes = volume_data.mft_valid_data_length as u64;
@@ -253,7 +276,7 @@ fn scan_mft_with_handle(
                     continue;
                 }
 
-                let base_record_ref = read_u48_le(record_data, 0x20);
+                let base_record_ref = read_file_reference(record_data, 0x20).record_number;
 
                 if base_record_ref != 0 {
                     // EXTENSION RECORD → store for later $ATTRIBUTE_LIST resolution
@@ -278,9 +301,16 @@ fn scan_mft_with_handle(
                 }
 
                 let is_directory = (flags & 0x02) != 0;
+                let sequence_number = read_u16_le(record, 16);
 
-                let (best_name, any_name, parent_record, data_size, has_attribute_list, file_name_size) =
-                    parse_mft_attributes(record, is_directory);
+                let (
+                    best_name,
+                    any_name,
+                    parent_record,
+                    data_size,
+                    has_attribute_list,
+                    file_name_size,
+                ) = parse_mft_attributes(record, is_directory);
 
                 // Use best_name, falling back to any_name (which includes DOS names)
                 let name = best_name.or(any_name);
@@ -298,40 +328,28 @@ fn scan_mft_with_handle(
                         data_size.unwrap_or(file_name_size)
                     };
 
-                    // Build path incrementally from parent
-                    if let Some(parent_path) = record_paths.get(&parent).cloned() {
-                        let full_path = parent_path.join(&name);
-
-                        // Register directory paths so children can find them
-                        if is_directory {
-                            record_paths.insert(record_number, full_path.clone());
-                        }
-
-                        let entry = RawFileEntry {
-                            path: full_path,
+                    records.insert(
+                        record_number,
+                        MftRecordInfo {
+                            sequence_number,
+                            parent,
+                            name,
                             size: final_size,
                             is_dir: is_directory,
-                            parent: Some(parent_path),
-                            mft_record: Some(record_number),
-                        };
+                        },
+                    );
 
-                        let entry_idx = entries.len();
-                        entries.push(entry);
-
-                        // Track for $ATTRIBUTE_LIST resolution
-                        if !is_directory && data_size.is_none() && has_attribute_list {
-                            needs_size_resolution.insert(record_number, entry_idx);
-                        }
-                    } else {
-                        // Parent not yet seen — defer for later
-                        deferred.push((parent, record_number, name, final_size, is_directory, !is_directory && data_size.is_none() && has_attribute_list));
+                    if !is_directory && data_size.is_none() && has_attribute_list {
+                        needs_size_resolution.insert(record_number);
                     }
 
-                    if is_directory {
-                        dirs_scanned += 1;
-                    } else {
-                        files_scanned += 1;
-                        total_bytes += final_size;
+                    if record_number != ROOT_RECORD_NUMBER {
+                        if is_directory {
+                            dirs_scanned += 1;
+                        } else {
+                            files_scanned += 1;
+                            total_bytes += final_size;
+                        }
                     }
                 } else {
                     records_skipped += 1;
@@ -357,79 +375,12 @@ fn scan_mft_with_handle(
         }
     }
 
-    // ==================== Resolve deferred records ====================
-    // Records whose parents weren't seen yet during the main scan pass.
-    // Iterate multiple times until no more progress is made.
-    let mut prev_deferred_count = deferred.len() + 1;
-    while !deferred.is_empty() && deferred.len() < prev_deferred_count {
-        prev_deferred_count = deferred.len();
-        let mut still_deferred = Vec::new();
-
-        for (parent, record_number, name, final_size, is_directory, needs_attr_resolve) in deferred {
-            if let Some(parent_path) = record_paths.get(&parent).cloned() {
-                let full_path = parent_path.join(&name);
-
-                if is_directory {
-                    record_paths.insert(record_number, full_path.clone());
-                }
-
-                let entry = RawFileEntry {
-                    path: full_path,
-                    size: final_size,
-                    is_dir: is_directory,
-                    parent: Some(parent_path),
-                    mft_record: Some(record_number),
-                };
-
-                let entry_idx = entries.len();
-                entries.push(entry);
-
-                if needs_attr_resolve {
-                    needs_size_resolution.insert(record_number, entry_idx);
-                }
-            } else {
-                still_deferred.push((parent, record_number, name, final_size, is_directory, needs_attr_resolve));
-            }
-        }
-
-        deferred = still_deferred;
-    }
-
-    if !deferred.is_empty() {
-        tracing::warn!(
-            "{} records could not be resolved (orphaned parent references), attaching to root",
-            deferred.len()
-        );
-        for (_, record_number, name, final_size, is_directory, needs_attr_resolve) in deferred {
-            let full_path = root_path.join(&name);
-
-            if is_directory {
-                record_paths.insert(record_number, full_path.clone());
-            }
-
-            let entry = RawFileEntry {
-                path: full_path,
-                size: final_size,
-                is_dir: is_directory,
-                parent: Some(root_path.clone()),
-                mft_record: Some(record_number),
-            };
-
-            let entry_idx = entries.len();
-            entries.push(entry);
-
-            if needs_attr_resolve {
-                needs_size_resolution.insert(record_number, entry_idx);
-            }
-        }
-    }
-
     // ==================== $ATTRIBUTE_LIST extension resolution ====================
     let mut resolved_count = 0u64;
     let mut recovered_bytes: u64 = 0;
 
     for (base_ref, extensions) in &base_to_extensions {
-        if let Some(&idx) = needs_size_resolution.get(base_ref) {
+        if needs_size_resolution.contains(base_ref) {
             // Look for $DATA in any of the extension records
             let mut data_size_from_ext: Option<u64> = None;
             for ext_data in extensions {
@@ -442,13 +393,14 @@ fn scan_mft_with_handle(
             }
 
             if let Some(new_size) = data_size_from_ext {
-                let entry = &mut entries[idx];
-                let old_size = entry.size;
-                if new_size > old_size {
-                    recovered_bytes += new_size - old_size;
-                    entry.size = new_size;
-                    total_bytes = total_bytes - old_size + new_size;
-                    resolved_count += 1;
+                if let Some(record) = records.get_mut(base_ref) {
+                    let old_size = record.size;
+                    if new_size > old_size {
+                        recovered_bytes += new_size - old_size;
+                        record.size = new_size;
+                        total_bytes = total_bytes - old_size + new_size;
+                        resolved_count += 1;
+                    }
                 }
             }
         }
@@ -486,7 +438,206 @@ fn scan_mft_with_handle(
         elapsed_ms: elapsed.as_millis() as u64,
     });
 
-    Ok(entries)
+    Ok(build_tree_from_mft_records(root_path, records))
+}
+
+#[cfg(windows)]
+fn build_tree_from_mft_records(
+    root_path: PathBuf,
+    records: HashMap<u64, MftRecordInfo>,
+) -> FileTree {
+    let root_name = root_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| root_path.to_string_lossy().to_string());
+
+    let mut tree = FileTree::new(&root_name, root_path);
+    let mut children_by_parent: HashMap<u64, Vec<u64>> = HashMap::new();
+    let mut unresolved_seed_records: Vec<u64> = Vec::new();
+
+    for (&record_number, record) in &records {
+        if record_number == ROOT_RECORD_NUMBER {
+            continue;
+        }
+
+        let parent_record = record.parent.record_number;
+        let valid_parent = if parent_record == ROOT_RECORD_NUMBER {
+            true
+        } else {
+            records
+                .get(&parent_record)
+                .map(|parent| parent.sequence_number == record.parent.sequence_number)
+                .unwrap_or(false)
+        };
+
+        if valid_parent && parent_record != record_number {
+            children_by_parent
+                .entry(parent_record)
+                .or_default()
+                .push(record_number);
+        } else {
+            unresolved_seed_records.push(record_number);
+        }
+    }
+
+    let mut node_ids: HashMap<u64, NodeId> = HashMap::new();
+    node_ids.insert(ROOT_RECORD_NUMBER, tree.root);
+    insert_mft_subtree(
+        &mut tree,
+        &records,
+        &children_by_parent,
+        ROOT_RECORD_NUMBER,
+        &mut node_ids,
+    );
+
+    let unresolved_records: HashSet<u64> = records
+        .keys()
+        .copied()
+        .filter(|record_number| {
+            *record_number != ROOT_RECORD_NUMBER && !node_ids.contains_key(record_number)
+        })
+        .collect();
+
+    if !unresolved_records.is_empty() {
+        tracing::warn!(
+            "{} MFT records were unreachable from the volume root; placing them in an explicit unresolved bucket",
+            unresolved_records.len()
+        );
+
+        let unresolved_bucket = tree.add_child(
+            tree.root,
+            FileNode {
+                name: CompactString::new(UNRESOLVED_BUCKET_NAME),
+                size: 0,
+                is_dir: true,
+                extension_id: 0,
+                category: FileCategory::Misc,
+                parent: Some(tree.root),
+                first_child: None,
+                next_sibling: None,
+                depth: 0,
+            },
+        );
+
+        let mut unresolved_children: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut unresolved_roots: Vec<u64> = Vec::new();
+
+        for &record_number in &unresolved_records {
+            let record = &records[&record_number];
+            let parent_record = record.parent.record_number;
+            let parent_unresolved = unresolved_records.contains(&parent_record)
+                && parent_record != record_number
+                && records
+                    .get(&parent_record)
+                    .map(|parent| parent.sequence_number == record.parent.sequence_number)
+                    .unwrap_or(false);
+
+            if parent_unresolved {
+                unresolved_children
+                    .entry(parent_record)
+                    .or_default()
+                    .push(record_number);
+            } else {
+                unresolved_roots.push(record_number);
+            }
+        }
+
+        for record_number in unresolved_roots {
+            let record = &records[&record_number];
+            let node_id = add_mft_node(&mut tree, unresolved_bucket, record);
+            node_ids.insert(record_number, node_id);
+            insert_mft_subtree(
+                &mut tree,
+                &records,
+                &unresolved_children,
+                record_number,
+                &mut node_ids,
+            );
+        }
+
+        for record_number in unresolved_seed_records {
+            if unresolved_records.contains(&record_number) && !node_ids.contains_key(&record_number)
+            {
+                let record = &records[&record_number];
+                let node_id = add_mft_node(&mut tree, unresolved_bucket, record);
+                node_ids.insert(record_number, node_id);
+                insert_mft_subtree(
+                    &mut tree,
+                    &records,
+                    &unresolved_children,
+                    record_number,
+                    &mut node_ids,
+                );
+            }
+        }
+    }
+
+    aggregate::aggregate_sizes(&mut tree);
+    aggregate::sort_children_by_size(&mut tree);
+    tree
+}
+
+#[cfg(windows)]
+fn insert_mft_subtree(
+    tree: &mut FileTree,
+    records: &HashMap<u64, MftRecordInfo>,
+    children_by_parent: &HashMap<u64, Vec<u64>>,
+    parent_record: u64,
+    node_ids: &mut HashMap<u64, NodeId>,
+) {
+    let mut stack = vec![parent_record];
+
+    while let Some(current_parent_record) = stack.pop() {
+        let Some(&parent_node_id) = node_ids.get(&current_parent_record) else {
+            continue;
+        };
+
+        let Some(children) = children_by_parent.get(&current_parent_record) else {
+            continue;
+        };
+
+        for &child_record in children {
+            if node_ids.contains_key(&child_record) {
+                continue;
+            }
+
+            let Some(record) = records.get(&child_record) else {
+                continue;
+            };
+
+            let child_node_id = add_mft_node(tree, parent_node_id, record);
+            node_ids.insert(child_record, child_node_id);
+
+            if record.is_dir {
+                stack.push(child_record);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn add_mft_node(tree: &mut FileTree, parent_id: NodeId, record: &MftRecordInfo) -> NodeId {
+    let classification = extensions::classify_path(Path::new(record.name.as_str()));
+    let extension_id = classification
+        .normalized_extension
+        .as_deref()
+        .map(|ext| tree.intern_extension(ext))
+        .unwrap_or(0);
+
+    tree.add_child(
+        parent_id,
+        FileNode {
+            name: CompactString::new(&record.name),
+            size: record.size,
+            is_dir: record.is_dir,
+            extension_id,
+            category: classification.category,
+            parent: Some(parent_id),
+            first_child: None,
+            next_sibling: None,
+            depth: 0,
+        },
+    )
 }
 
 /// Read MFT record 0 and parse data runs to get the full MFT extent list.
@@ -507,15 +658,8 @@ fn read_mft_extents(
     }
 
     let mut bytes_read: u32 = 0;
-    unsafe {
-        ReadFile(
-            handle,
-            Some(&mut record0),
-            Some(&mut bytes_read),
-            None,
-        )
-    }
-    .context("Failed to read MFT record 0")?;
+    unsafe { ReadFile(handle, Some(&mut record0), Some(&mut bytes_read), None) }
+        .context("Failed to read MFT record 0")?;
 
     if bytes_read < bytes_per_record as u32 {
         anyhow::bail!("Short read on MFT record 0: got {} bytes", bytes_read);
@@ -561,13 +705,7 @@ fn read_mft_extents(
         offset += attr_length;
     }
 
-    // Fallback: if we couldn't parse data runs, treat MFT as a single extent
-    // This is the old behavior - it will only work if the MFT isn't fragmented
-    tracing::warn!("Could not find $DATA attribute in $MFT record 0, assuming contiguous MFT");
-    Ok(vec![MftExtent {
-        disk_offset: mft_start_offset,
-        length: u64::MAX, // will be clamped by mft_valid_data_length during reading
-    }])
+    anyhow::bail!("Could not find the unnamed $DATA attribute in $MFT record 0")
 }
 
 /// Parse NTFS data runs (also called "run list") from a non-resident attribute.
@@ -681,12 +819,19 @@ fn apply_fixups(record: &mut [u8]) -> bool {
 fn parse_mft_attributes(
     record: &[u8],
     is_directory: bool,
-) -> (Option<String>, Option<String>, Option<u64>, Option<u64>, bool, u64) {
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<MftReference>,
+    Option<u64>,
+    bool,
+    u64,
+) {
     let mut best_file_name: Option<String> = None;
     let mut best_namespace: u8 = 255;
     let mut any_name: Option<String> = None;
-    let mut any_name_parent: Option<u64> = None;
-    let mut parent_record: Option<u64> = None;
+    let mut any_name_parent: Option<MftReference> = None;
+    let mut parent_record: Option<MftReference> = None;
     let mut file_name_size: u64 = 0;
     let mut data_size: Option<u64> = None;
     let mut has_attribute_list: bool = false;
@@ -715,7 +860,7 @@ fn parse_mft_attributes(
             let value_offset = offset + value_offset_in_attr;
 
             if value_offset + 0x42 <= record.len() {
-                let parent_ref = read_u48_le(record, value_offset);
+                let parent_ref = read_file_reference(record, value_offset);
                 let name_length = record[value_offset + 0x40] as usize;
                 let namespace = record[value_offset + 0x41];
 
@@ -774,7 +919,14 @@ fn parse_mft_attributes(
         parent_record = any_name_parent;
     }
 
-    (best_file_name, any_name, parent_record, data_size, has_attribute_list, file_name_size)
+    (
+        best_file_name,
+        any_name,
+        parent_record,
+        data_size,
+        has_attribute_list,
+        file_name_size,
+    )
 }
 
 /// Parse $DATA size from a record (used for extension records in Pass 2).
@@ -823,11 +975,14 @@ fn parse_data_size_from_record(record: &[u8]) -> Option<u64> {
 
 // ─── Helper readers ─────────────────────────────────────────────────────────
 
-/// Read 6 bytes (48-bit) as a little-endian u64, used for MFT record references.
-/// NTFS record references are 8 bytes: low 6 = record number, high 2 = sequence.
+/// Read an NTFS file reference: low 6 bytes = record number, high 2 bytes = sequence number.
 #[inline]
-fn read_u48_le(data: &[u8], offset: usize) -> u64 {
-    read_u64_le(data, offset) & 0x0000_FFFF_FFFF_FFFF
+fn read_file_reference(data: &[u8], offset: usize) -> MftReference {
+    let raw = read_u64_le(data, offset);
+    MftReference {
+        record_number: raw & 0x0000_FFFF_FFFF_FFFF,
+        sequence_number: (raw >> 48) as u16,
+    }
 }
 
 #[inline]
@@ -862,13 +1017,11 @@ fn read_u64_le(data: &[u8], offset: usize) -> u64 {
 // ─── Non-Windows stubs ──────────────────────────────────────────────────────
 
 #[cfg(not(windows))]
-pub fn scan_mft(
-    drive_letter: char,
-    progress_tx: mpsc::Sender<ScanProgress>,
-) -> Result<Vec<RawFileEntry>> {
+pub fn scan_mft(drive_letter: char, progress_tx: mpsc::Sender<ScanProgress>) -> Result<FileTree> {
     let root = PathBuf::from(format!("{}:\\", drive_letter));
     tracing::warn!("MFT scanning only available on Windows, falling back to jwalk");
-    super::walk::scan_walkdir(&root, progress_tx)
+    let entries = super::walk::scan_walkdir(&root, progress_tx)?;
+    Ok(crate::tree::build_tree(&entries))
 }
 
 #[cfg(windows)]
@@ -876,7 +1029,10 @@ pub fn is_mft_available(drive_letter: char) -> bool {
     use windows::Win32::Foundation::GENERIC_READ;
 
     let volume_path = format!("\\\\.\\{}:", drive_letter);
-    let wide_path: Vec<u16> = volume_path.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_path: Vec<u16> = volume_path
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     let handle = unsafe {
         CreateFileW(

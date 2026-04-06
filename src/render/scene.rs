@@ -4,8 +4,9 @@ use vello::kurbo::{Affine, Rect};
 use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
 use vello::Scene;
 
+use super::colors;
 use super::cushion;
-use super::text::{TextRenderer, TextRenderResult};
+use super::text::{TextRenderResult, TextRenderer};
 use crate::layout::LayoutRect;
 use crate::tree::arena::{FileTree, NodeId};
 use crate::ui::tooltip::format_size;
@@ -23,6 +24,7 @@ pub fn build_scene(
     layout_rects: &[LayoutRect],
     tree: &FileTree,
     hover_node: Option<NodeId>,
+    selected_node: Option<NodeId>,
     text_renderer: &mut TextRenderer,
     show_text_labels: bool,
     label_font_scale: f32,
@@ -50,6 +52,8 @@ pub fn build_scene(
         if !node.is_dir || rect.depth == 0 || rect.w < 24.0 || rect.h < 20.0 {
             continue;
         }
+
+        draw_directory_mix_overlay(scene, tree, rect);
 
         let (frame, header) = directory_frame_params(rect.depth);
         let inner_w = rect.w - frame * 2.0;
@@ -104,7 +108,12 @@ pub fn build_scene(
             .filter(|r| {
                 let node = tree.get(r.node);
                 let area = r.w * r.h;
-                node.is_dir && r.depth >= 1 && area >= min_label_area && r.w >= 64.0 && r.h >= 18.0 && r.depth <= 10
+                node.is_dir
+                    && r.depth >= 1
+                    && area >= min_label_area
+                    && r.w >= 64.0
+                    && r.h >= 18.0
+                    && r.depth <= 10
             })
             .collect();
         candidates.sort_by(|a, b| (b.w * b.h).partial_cmp(&(a.w * a.h)).unwrap());
@@ -187,6 +196,62 @@ pub fn build_scene(
         );
     }
 
+    if let Some(selected_id) = selected_node {
+        for rect in layout_rects {
+            if rect.node != selected_id {
+                continue;
+            }
+
+            let x0 = rect.x;
+            let y0 = rect.y;
+            let x1 = rect.x + rect.w;
+            let y1 = rect.y + rect.h;
+            let outer = Color::new([0.94, 0.97, 1.0, 0.90]);
+            let inner = Color::new([0.16, 0.67, 1.0, 0.82]);
+            let top = Rect::new(x0 as f64, y0 as f64, x1 as f64, (y0 + 2.5) as f64);
+            let bottom = Rect::new(x0 as f64, (y1 - 2.5) as f64, x1 as f64, y1 as f64);
+            let left = Rect::new(x0 as f64, y0 as f64, (x0 + 2.5) as f64, y1 as f64);
+            let right = Rect::new((x1 - 2.5) as f64, y0 as f64, x1 as f64, y1 as f64);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, outer, None, &top);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, outer, None, &bottom);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, outer, None, &left);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, outer, None, &right);
+
+            let inset = 3.5;
+            if rect.w > inset * 2.0 && rect.h > inset * 2.0 {
+                let top = Rect::new(
+                    (x0 + inset) as f64,
+                    (y0 + inset) as f64,
+                    (x1 - inset) as f64,
+                    (y0 + inset + 1.5) as f64,
+                );
+                let bottom = Rect::new(
+                    (x0 + inset) as f64,
+                    (y1 - inset - 1.5) as f64,
+                    (x1 - inset) as f64,
+                    (y1 - inset) as f64,
+                );
+                let left = Rect::new(
+                    (x0 + inset) as f64,
+                    (y0 + inset) as f64,
+                    (x0 + inset + 1.5) as f64,
+                    (y1 - inset) as f64,
+                );
+                let right = Rect::new(
+                    (x1 - inset - 1.5) as f64,
+                    (y0 + inset) as f64,
+                    (x1 - inset) as f64,
+                    (y1 - inset) as f64,
+                );
+                scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &top);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &bottom);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &left);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, inner, None, &right);
+            }
+            break;
+        }
+    }
+
     // Hover highlight helps orient which rectangle is under the cursor.
     if let Some(hover_id) = hover_node {
         let mut hovered_rect: Option<&LayoutRect> = None;
@@ -205,7 +270,9 @@ pub fn build_scene(
                 let node = tree.get(hover_id);
                 let text = format!("{}  {}", node.name, format_size(node.size));
                 let in_rect = rect.w >= 180.0 && rect.h >= 32.0;
-                if let Some(rendered) = text_renderer.render_text(&text, "default", 13.0, Some(320.0)) {
+                if let Some(rendered) =
+                    text_renderer.render_text(&text, "default", 13.0, Some(320.0))
+                {
                     if in_rect {
                         let x = rect.x + 6.0;
                         let y = rect.y + (rect.h - rendered.height as f32).max(2.0) * 0.5;
@@ -224,10 +291,11 @@ pub fn build_scene(
                         );
                         draw_text_to_scene(scene, rendered, x, y);
                     } else {
-                        let place_right = rect.x + rect.w + 180.0 < layout_rects
-                            .iter()
-                            .map(|r| r.x + r.w)
-                            .fold(0.0_f32, f32::max);
+                        let place_right = rect.x + rect.w + 180.0
+                            < layout_rects
+                                .iter()
+                                .map(|r| r.x + r.w)
+                                .fold(0.0_f32, f32::max);
                         let bx = if place_right {
                             rect.x + rect.w + 8.0
                         } else {
@@ -307,6 +375,68 @@ fn truncate_label(name: &str, max_width: f32, font_size: f32) -> String {
     let keep = max_chars - 3;
     let truncated: String = name.chars().take(keep).collect();
     format!("{}...", truncated)
+}
+
+fn draw_directory_mix_overlay(scene: &mut Scene, tree: &FileTree, rect: &LayoutRect) {
+    let weights = &tree.category_weights[rect.node.index()];
+    let total: u64 = weights.iter().sum();
+    if total == 0 {
+        return;
+    }
+
+    let mixes = colors::top_categories(weights, 4);
+    if mixes.is_empty() {
+        return;
+    }
+
+    let inset = 2.0_f32;
+    let inner_x = rect.x + inset;
+    let inner_y = rect.y + inset;
+    let inner_w = (rect.w - inset * 2.0).max(0.0);
+    let inner_h = (rect.h - inset * 2.0).max(0.0);
+    if inner_w < 8.0 || inner_h < 6.0 {
+        return;
+    }
+
+    let full_rect_overlay = rect.w >= 90.0 && rect.h >= 40.0;
+    let overlay_y = if full_rect_overlay {
+        inner_y
+    } else {
+        rect.y + rect.h - inset - (rect.h * 0.18).clamp(3.0, 8.0)
+    };
+    let overlay_h = if full_rect_overlay {
+        inner_h
+    } else {
+        (rect.h * 0.18).clamp(3.0, 8.0)
+    };
+    let alpha = if full_rect_overlay { 0.18 } else { 0.86 };
+
+    let mut cursor_x = inner_x;
+    for (index, (category, weight)) in mixes.iter().enumerate() {
+        let width = if index + 1 == mixes.len() {
+            inner_x + inner_w - cursor_x
+        } else {
+            inner_w * (*weight as f32 / total as f32)
+        };
+        if width <= 0.5 {
+            continue;
+        }
+        let base = colors::category_color(*category);
+        let band = Rect::new(
+            cursor_x as f64,
+            overlay_y as f64,
+            (cursor_x + width) as f64,
+            (overlay_y + overlay_h) as f64,
+        );
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            Color::new([base.r, base.g, base.b, alpha]),
+            None,
+            &band,
+        );
+        cursor_x += width;
+    }
 }
 
 /// Create a `peniko::ImageData` from an RGBA pixel buffer.

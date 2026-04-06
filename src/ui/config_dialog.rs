@@ -82,7 +82,11 @@ struct ConfigDialog {
 }
 
 impl ConfigDialog {
-    fn new(initial: DialogResult, output: Arc<Mutex<Option<DialogResult>>>, show_path_input: bool) -> Self {
+    fn new(
+        initial: DialogResult,
+        output: Arc<Mutex<Option<DialogResult>>>,
+        show_path_input: bool,
+    ) -> Self {
         Self {
             path_text: initial.scan_path.to_string_lossy().to_string(),
             min_area: initial.layout.min_area,
@@ -229,15 +233,30 @@ fn view(state: &ConfigDialog) -> Element<'_, Message> {
 
     let settings = column![
         text("Layout").size(18),
-        setting_slider("Min Area (px²)", state.min_area, 4.0..=400.0, Message::MinAreaChanged),
-        setting_slider("Min Side (px)", state.min_side, 1.0..=24.0, Message::MinSideChanged),
+        setting_slider(
+            "Min Area (px²)",
+            state.min_area,
+            4.0..=400.0,
+            Message::MinAreaChanged
+        ),
+        setting_slider(
+            "Min Side (px)",
+            state.min_side,
+            1.0..=24.0,
+            Message::MinSideChanged
+        ),
         setting_slider(
             "Recurse Min Side (px)",
             state.recurse_side,
             8.0..=160.0,
             Message::RecurseSideChanged
         ),
-        setting_slider("Directory Frame (px)", state.frame_px, 0.0..=8.0, Message::FramePxChanged),
+        setting_slider(
+            "Directory Frame (px)",
+            state.frame_px,
+            0.0..=8.0,
+            Message::FramePxChanged
+        ),
         setting_slider(
             "Directory Header (px)",
             state.header_px,

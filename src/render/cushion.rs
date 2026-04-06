@@ -78,7 +78,7 @@ pub fn rasterize_cushions(
 
         // Base color
         let base = if node.is_dir {
-            colors::directory_color(&node.name, rect.depth, color_settings)
+            colors::directory_color(&tree.category_weights[rect.node.index()], color_settings)
         } else {
             let ext = if node.extension_id > 0 {
                 tree.extensions
@@ -88,7 +88,7 @@ pub fn rasterize_cushions(
             } else {
                 ""
             };
-            colors::extension_color(ext, color_settings)
+            colors::file_color(node.category, ext, color_settings)
         };
 
         let [sx1, sx2, sy1, sy2] = rect.surface;
