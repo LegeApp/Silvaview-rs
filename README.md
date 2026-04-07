@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./Screenshot%202026-02-18%20083634.png" alt="SilvaView-rs screenshot" width="100%" />
+  <img src="./screenshot.png" alt="SilvaView-rs screenshot" width="100%" />
 </div>
 
 # SilvaView-rs
