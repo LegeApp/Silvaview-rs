@@ -143,13 +143,7 @@ impl ApplicationHandler for SilvaViewApp {
                 self.app.mouse.x = position.x as f32;
                 self.app.mouse.y = position.y as f32;
                 if self.app.vibrancy_dragging {
-                    if let Some(track) = self
-                        .app
-                        .sidebar_hit_regions
-                        .iter()
-                        .find(|r| matches!(r.id, SidebarHitId::VibrancyTrack))
-                        .map(|r| r.bounds)
-                    {
+                    if let Some(track) = self.app.vibrancy_track_bounds() {
                         self.app.color_settings.vibrancy =
                             ui::overlay::vibrancy_value_from_track_x(self.app.mouse.x, track);
                         self.app.needs_relayout = true;
@@ -225,13 +219,7 @@ impl ApplicationHandler for SilvaViewApp {
                                 self.app.needs_relayout = true;
                             }
                             SidebarHitId::VibrancyTrack => {
-                                if let Some(track) = self
-                                    .app
-                                    .sidebar_hit_regions
-                                    .iter()
-                                    .find(|r| matches!(r.id, SidebarHitId::VibrancyTrack))
-                                    .map(|r| r.bounds)
-                                {
+                                if let Some(track) = self.app.vibrancy_track_bounds() {
                                     self.app.color_settings.vibrancy =
                                         ui::overlay::vibrancy_value_from_track_x(
                                             self.app.mouse.x,

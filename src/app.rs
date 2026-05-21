@@ -82,11 +82,10 @@ pub struct App {
 impl App {
     pub fn new(scan_path: PathBuf) -> Self {
         let mut text_renderer = TextRenderer::new();
-        // Try to load a system font
-        if let Err(_) = text_renderer.load_system_font("default") {
-            tracing::warn!("Failed to load system font, text labels will not be available");
-        } else {
+        if text_renderer.load_system_font("default").is_ok() {
             tracing::info!("Loaded default system font for text overlays");
+        } else {
+            tracing::warn!("Failed to load system font, text labels will not be available");
         }
 
         Self {
@@ -205,35 +204,30 @@ impl App {
         if let Some(rx) = &self.scan_rx {
             // Drain all available messages
             while let Ok(progress) = rx.try_recv() {
-                match &progress {
-                    ScanProgress::Completed { .. } => {
-                        // Check if the tree is ready
-                        if let Some(tree) = SCAN_RESULT.lock().unwrap().take() {
-                            let root = tree.root;
+                if matches!(progress, ScanProgress::Completed { .. }) {
+                    if let Some(tree) = SCAN_RESULT.lock().unwrap().take() {
+                        let root = tree.root;
 
-                            // Validate tree has actual data
-                            if tree.len() <= 1 {
-                                tracing::error!(
-                                    "Scan returned no files! Possible causes:\n\
-                                     - Scanning C:\\ requires Administrator privileges\n\
-                                     - MFT access denied\n\
-                                     - Try scanning a different directory (e.g., D:\\Rust-projects)\n\
-                                     - Or run as Administrator"
-                                );
-                            } else {
-                                tracing::info!("Tree built: {} nodes", tree.len());
-                            }
-
-                            self.tree = Some(tree);
-                            self.navigation = Some(NavigationState::new(root));
-                            self.phase = AppPhase::Ready;
-                            self.loading_started = None;
-                            self.needs_relayout = true;
-                            self.scan_rx = None;
-                            return true;
+                        if tree.len() <= 1 {
+                            tracing::error!(
+                                "Scan returned no files! Possible causes:\n\
+                                 - Scanning C:\\ requires Administrator privileges\n\
+                                 - MFT access denied\n\
+                                 - Try scanning a different directory (e.g., D:\\Rust-projects)\n\
+                                 - Or run as Administrator"
+                            );
+                        } else {
+                            tracing::info!("Tree built: {} nodes", tree.len());
                         }
+
+                        self.tree = Some(tree);
+                        self.navigation = Some(NavigationState::new(root));
+                        self.phase = AppPhase::Ready;
+                        self.loading_started = None;
+                        self.needs_relayout = true;
+                        self.scan_rx = None;
+                        return true;
                     }
-                    _ => {}
                 }
                 self.scan_progress = Some(progress);
             }
@@ -507,7 +501,7 @@ impl App {
             }
 
             if let Some(clipboard) = self.clipboard.as_mut() {
-                match clipboard.set_text(path.clone()) {
+                match clipboard.set_text(path.as_str()) {
                     Ok(()) => return true,
                     Err(e) => {
                         last_err = Some(e.to_string());
@@ -527,14 +521,20 @@ impl App {
         false
     }
 
+    pub fn vibrancy_track_bounds(&self) -> Option<[f32; 4]> {
+        self.sidebar_hit_regions
+            .iter()
+            .find(|r| matches!(r.id, crate::ui::overlay::SidebarHitId::VibrancyTrack))
+            .map(|r| r.bounds)
+    }
+
     fn sidebar_path_preview(&self) -> Option<String> {
-        if let Some(path) = &self.locked_path {
-            return Some(path.clone());
+        if let Some(path) = self.locked_path.clone() {
+            return Some(path);
         }
-        if let (Some(tree), Some(node)) = (&self.tree, self.hover_node) {
-            return Some(crate::ui::tooltip::build_path(tree, node));
-        }
-        None
+        let tree = self.tree.as_ref()?;
+        let node = self.hover_node?;
+        Some(crate::ui::tooltip::build_path(tree, node))
     }
 }
 

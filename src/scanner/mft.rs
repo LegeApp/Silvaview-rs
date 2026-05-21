@@ -279,11 +279,13 @@ fn scan_mft_with_handle(
                 let base_record_ref = read_file_reference(record_data, 0x20).record_number;
 
                 if base_record_ref != 0 {
-                    // EXTENSION RECORD → store for later $ATTRIBUTE_LIST resolution
+                    // EXTENSION RECORD → store (fixups applied) for later $ATTRIBUTE_LIST resolution
+                    let mut ext_copy = record_data.to_vec();
+                    apply_fixups(&mut ext_copy);
                     base_to_extensions
                         .entry(base_record_ref)
-                        .or_insert_with(Vec::new)
-                        .push(record_data.to_vec());
+                        .or_default()
+                        .push(ext_copy);
                     records_skipped += 1;
                     continue;
                 }
@@ -381,16 +383,9 @@ fn scan_mft_with_handle(
 
     for (base_ref, extensions) in &base_to_extensions {
         if needs_size_resolution.contains(base_ref) {
-            // Look for $DATA in any of the extension records
-            let mut data_size_from_ext: Option<u64> = None;
-            for ext_data in extensions {
-                let mut ext_copy = ext_data.clone();
-                apply_fixups(&mut ext_copy);
-                if let Some(size) = parse_data_size_from_record(&ext_copy) {
-                    data_size_from_ext = Some(size);
-                    break;
-                }
-            }
+            let data_size_from_ext = extensions
+                .iter()
+                .find_map(|ext| parse_data_size_from_record(ext));
 
             if let Some(new_size) = data_size_from_ext {
                 if let Some(record) = records.get_mut(base_ref) {
@@ -441,6 +436,24 @@ fn scan_mft_with_handle(
     Ok(build_tree_from_mft_records(root_path, records))
 }
 
+/// Returns true if `record`'s `parent` reference points to an entry in `records`
+/// whose sequence number matches (i.e. the parent is the same MFT record the
+/// child was attached to, not a recycled slot).
+#[cfg(windows)]
+fn parent_matches(
+    records: &HashMap<u64, MftRecordInfo>,
+    parent_record: u64,
+    expected_sequence: u16,
+) -> bool {
+    if parent_record == ROOT_RECORD_NUMBER {
+        return true;
+    }
+    records
+        .get(&parent_record)
+        .map(|parent| parent.sequence_number == expected_sequence)
+        .unwrap_or(false)
+}
+
 #[cfg(windows)]
 fn build_tree_from_mft_records(
     root_path: PathBuf,
@@ -461,14 +474,7 @@ fn build_tree_from_mft_records(
         }
 
         let parent_record = record.parent.record_number;
-        let valid_parent = if parent_record == ROOT_RECORD_NUMBER {
-            true
-        } else {
-            records
-                .get(&parent_record)
-                .map(|parent| parent.sequence_number == record.parent.sequence_number)
-                .unwrap_or(false)
-        };
+        let valid_parent = parent_matches(&records, parent_record, record.parent.sequence_number);
 
         if valid_parent && parent_record != record_number {
             children_by_parent
@@ -527,10 +533,7 @@ fn build_tree_from_mft_records(
             let parent_record = record.parent.record_number;
             let parent_unresolved = unresolved_records.contains(&parent_record)
                 && parent_record != record_number
-                && records
-                    .get(&parent_record)
-                    .map(|parent| parent.sequence_number == record.parent.sequence_number)
-                    .unwrap_or(false);
+                && parent_matches(&records, parent_record, record.parent.sequence_number);
 
             if parent_unresolved {
                 unresolved_children
