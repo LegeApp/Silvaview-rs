@@ -1,5 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+fn path_display_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
 
 use iced::widget::{button, checkbox, column, container, row, slider, text, text_input};
 use iced::{application, window, Element, Length, Task, Theme};
@@ -88,7 +92,7 @@ impl ConfigDialog {
         show_path_input: bool,
     ) -> Self {
         Self {
-            path_text: initial.scan_path.to_string_lossy().to_string(),
+            path_text: path_display_string(&initial.scan_path),
             min_area: initial.layout.min_area,
             min_side: initial.layout.min_side,
             recurse_side: initial.layout.recurse_min_side,
@@ -112,7 +116,7 @@ impl ConfigDialog {
             }
             Message::BrowsePath => {
                 if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                    self.path_text = path.to_string_lossy().to_string();
+                    self.path_text = path_display_string(&path);
                 }
                 Task::none()
             }
