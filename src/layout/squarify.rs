@@ -111,8 +111,9 @@ pub fn compute_layout_lshape(
     exclusion_rect: [f32; 4],
     config: &LayoutConfig,
 ) -> Layout {
-    let mut rects = Vec::with_capacity(tree.len() / 4);
-    let mut node_to_rect = HashMap::with_capacity(rects.capacity());
+    let estimated_capacity = tree.len() / 4;
+    let mut rects = Vec::with_capacity(estimated_capacity);
+    let mut node_to_rect = HashMap::with_capacity(estimated_capacity);
 
     let root_rect = LayoutRect {
         node: root,
