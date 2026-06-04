@@ -7,7 +7,7 @@ use crate::render::text::{TextRenderResult, TextRenderer};
 use crate::tree::arena::{FileTree, NodeId};
 use crate::tree::extensions::FileCategory;
 use crate::ui::drives::DriveEntry;
-use crate::ui::tooltip::{self, SelectionInfo};
+use crate::ui::tooltip::{SelectionInfo, TooltipInfo};
 
 /// Analytics data for the file type breakdown panel.
 #[derive(Debug, Default)]
@@ -26,7 +26,6 @@ pub enum SidebarHitId {
     VibrancyUp,
     VibrancyTrack,
     ToggleHoverInfo,
-    CopyPath,
 }
 
 #[derive(Debug, Clone)]
@@ -132,48 +131,101 @@ pub fn render_analytics_panel(
 }
 
 /// Render hover tooltip for a file.
-pub fn render_tooltip(
+pub fn render_hover_popup(
     scene: &mut Scene,
-    tree: &FileTree,
-    node_id: NodeId,
-    mouse_x: f32,
-    mouse_y: f32,
-) {
-    let _info = tooltip::build_tooltip(tree, node_id);
-
-    // Tooltip background
-    let tooltip_width = 300.0;
-    let tooltip_height = 80.0;
-    let mut tooltip_x = mouse_x + 15.0;
-    let tooltip_y = mouse_y + 15.0;
-
-    // Keep tooltip on screen
-    if tooltip_x + tooltip_width > 1280.0 {
-        tooltip_x = mouse_x - tooltip_width - 15.0;
-    }
-
-    let tooltip_rect = Rect::new(
-        tooltip_x as f64,
-        tooltip_y as f64,
-        (tooltip_x + tooltip_width) as f64,
-        (tooltip_y + tooltip_height) as f64,
+    text_renderer: &mut TextRenderer,
+    info: &TooltipInfo,
+    anchor: [f32; 2],
+    viewport_width: f32,
+    viewport_height: f32,
+    copied: bool,
+) -> [f32; 4] {
+    let panel_w = (viewport_width * 0.30).clamp(300.0, 420.0);
+    let panel_h = 116.0;
+    let offset = 18.0;
+    let panel_x = if anchor[0] + panel_w + offset <= viewport_width - 12.0 {
+        anchor[0] + offset
+    } else {
+        (anchor[0] - panel_w - offset).max(212.0)
+    };
+    let panel_y = (anchor[1] + 14.0).clamp(12.0, viewport_height - panel_h - 12.0);
+    let panel = Rect::new(
+        panel_x as f64,
+        panel_y as f64,
+        (panel_x + panel_w) as f64,
+        (panel_y + panel_h) as f64,
     );
-
-    // Dark background with slight transparency
-    let bg_brush = Brush::Solid(Color::new([0.15, 0.15, 0.18, 0.95]));
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
-        &bg_brush,
+        &Color::new([0.05, 0.07, 0.09, 0.94]),
         None,
-        &tooltip_rect,
+        &panel,
     );
 
-    // Border
-    // TODO: Add stroke rendering when we add text support
+    let accent = Rect::new(
+        panel_x as f64,
+        panel_y as f64,
+        (panel_x + 4.0) as f64,
+        (panel_y + panel_h) as f64,
+    );
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        &Color::new([0.24, 0.72, 1.0, 0.96]),
+        None,
+        &accent,
+    );
 
-    // For now, just render the background
-    // Text will be added when we integrate parley
+    let title = format!(
+        "{}: {}",
+        if info.is_dir { "Folder" } else { "File" },
+        info.name
+    );
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        &title,
+        panel_x + 16.0,
+        panel_y + 12.0,
+        panel_w - 32.0,
+    );
+    let meta = if let Some(child_count) = info.child_count {
+        format!("{}  |  {} items", info.size_display, child_count)
+    } else {
+        format!("{}  |  {}", info.category, info.size_display)
+    };
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        &meta,
+        panel_x + 16.0,
+        panel_y + 34.0,
+        panel_w - 32.0,
+    );
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        &info.full_path,
+        panel_x + 16.0,
+        panel_y + 58.0,
+        panel_w - 32.0,
+    );
+    let action = if copied {
+        "Path copied"
+    } else {
+        "Click to copy path  |  Double-click to open"
+    };
+    draw_label_with_width(
+        scene,
+        text_renderer,
+        action,
+        panel_x + 16.0,
+        panel_y + 86.0,
+        panel_w - 32.0,
+    );
+
+    [panel_x, panel_y, panel_x + panel_w, panel_y + panel_h]
 }
 
 /// Render breadcrumb navigation path at the top.
@@ -191,7 +243,7 @@ pub fn render_breadcrumb(
     scene.fill(Fill::NonZero, Affine::IDENTITY, &bg_brush, None, &bg_rect);
 
     // Build path
-    let _path = tooltip::build_path(tree, current_root);
+    let _path = crate::ui::tooltip::build_path(tree, current_root);
 
     // TODO: Render text path using parley
     // For Phase 2, we'll keep it simple without text initially
@@ -205,8 +257,6 @@ pub fn render_left_sidebar(
     selected_scan_path: &std::path::Path,
     color_settings: &ColorSettings,
     show_hover_info: bool,
-    path_preview: Option<&str>,
-    path_copy_enabled: bool,
 ) -> Vec<SidebarHitRegion> {
     let [x1, y1, x2, y2] = sidebar_panel_bounds(viewport_height, drives.len());
     let visible_drives = drives.len().min(12);
@@ -359,40 +409,6 @@ pub fn render_left_sidebar(
         id: SidebarHitId::ToggleHoverInfo,
         bounds: [10.0, y, x2 - 10.0, y + 28.0],
     });
-    y += 38.0;
-
-    let path_section = if path_copy_enabled {
-        "Path (Locked)"
-    } else {
-        "Path (Hover)"
-    };
-    draw_label(scene, text_renderer, path_section, 14.0, y);
-    y += 18.0;
-
-    let path_box_h = 34.0;
-    let path_r = Rect::new(10.0, y as f64, (x2 - 10.0) as f64, (y + path_box_h) as f64);
-    let path_fill = if path_copy_enabled {
-        Color::new([0.18, 0.22, 0.30, 0.86])
-    } else {
-        Color::new([0.14, 0.15, 0.18, 0.72])
-    };
-    scene.fill(Fill::NonZero, Affine::IDENTITY, &path_fill, None, &path_r);
-    let path_text = path_preview.unwrap_or("Hover over a file or folder");
-    let icon_x = x2 - 27.0;
-    draw_copy_icon(scene, icon_x, y + 8.0, path_copy_enabled, &path_fill);
-    draw_label_with_width(
-        scene,
-        text_renderer,
-        path_text,
-        16.0,
-        y + 9.0,
-        (x2 - 10.0) - 16.0 - 24.0,
-    );
-    hits.push(SidebarHitRegion {
-        id: SidebarHitId::CopyPath,
-        bounds: [10.0, y, x2 - 10.0, y + path_box_h],
-    });
-
     hits
 }
 
@@ -630,8 +646,8 @@ fn draw_label_with_width(
 
 fn sidebar_height(visible_drives: usize) -> f32 {
     let drives_h = visible_drives as f32 * (26.0 + 6.0);
-    // Header + section padding + appearance controls + hover/path panels.
-    14.0 + 22.0 + drives_h + 8.0 + 24.0 + 38.0 + 18.0 + 36.0 + 36.0 + 38.0 + 18.0 + 34.0 + 8.0
+    // Header + section padding + appearance controls + hover toggle.
+    14.0 + 22.0 + drives_h + 8.0 + 24.0 + 38.0 + 18.0 + 36.0 + 36.0 + 38.0 + 8.0
 }
 
 fn draw_label_centered(
@@ -647,30 +663,4 @@ fn draw_label_centered(
         let y = row_y + ((row_h - rendered.height as f32) * 0.5).max(0.0);
         draw_text(scene, rendered, x, y);
     }
-}
-
-fn draw_copy_icon(scene: &mut Scene, x: f32, y: f32, enabled: bool, background: &Color) {
-    let alpha = if enabled { 0.95 } else { 0.42 };
-    let outline = Color::new([0.86, 0.89, 0.95, alpha]);
-    draw_icon_square(scene, x + 4.0, y + 1.0, 10.0, &outline, background);
-    draw_icon_square(scene, x, y + 5.0, 10.0, &outline, background);
-}
-
-fn draw_icon_square(
-    scene: &mut Scene,
-    x: f32,
-    y: f32,
-    size: f32,
-    outline: &Color,
-    background: &Color,
-) {
-    let outer = Rect::new(x as f64, y as f64, (x + size) as f64, (y + size) as f64);
-    let inner = Rect::new(
-        (x + 1.6) as f64,
-        (y + 1.6) as f64,
-        (x + size - 1.6) as f64,
-        (y + size - 1.6) as f64,
-    );
-    scene.fill(Fill::NonZero, Affine::IDENTITY, outline, None, &outer);
-    scene.fill(Fill::NonZero, Affine::IDENTITY, background, None, &inner);
 }

@@ -55,7 +55,9 @@ pub struct App {
     pub selected_info: Option<SelectionInfo>,
     pub selected_anchor: Option<[f32; 2]>,
     pub selected_popup_bounds: Option<[f32; 4]>,
-    pub locked_path: Option<String>,
+    pub hover_anchor: Option<[f32; 2]>,
+    pub hover_popup_bounds: Option<[f32; 4]>,
+    pub copied_path: Option<String>,
     clipboard: Option<arboard::Clipboard>,
     pub analytics: Analytics,
     pub show_analytics_panel: bool,
@@ -106,7 +108,9 @@ impl App {
             selected_info: None,
             selected_anchor: None,
             selected_popup_bounds: None,
-            locked_path: None,
+            hover_anchor: None,
+            hover_popup_bounds: None,
+            copied_path: None,
             clipboard: None,
             analytics: Analytics::default(),
             show_analytics_panel: false, // Keep analytics panel off by default
@@ -190,7 +194,9 @@ impl App {
         self.selected_info = None;
         self.selected_anchor = None;
         self.selected_popup_bounds = None;
-        self.locked_path = None;
+        self.hover_anchor = None;
+        self.hover_popup_bounds = None;
+        self.copied_path = None;
         self.cached_treemap_image = None;
         self.label_hit_regions.clear();
         self.sidebar_hit_regions.clear();
@@ -302,16 +308,25 @@ impl App {
                 );
             }
 
-            // DISABLED FOR DEBUGGING - Render tooltip if hovering
-            // if let Some(node_id) = self.hover_node {
-            //     crate::ui::overlay::render_tooltip(
-            //         &mut self.scene,
-            //         tree,
-            //         node_id,
-            //         self.mouse.x,
-            //         self.mouse.y,
-            //     );
-            // }
+            if self.show_hover_info && self.selected_info.is_none() {
+                if let (Some(node_id), Some(anchor)) = (self.hover_node, self.hover_anchor) {
+                    let info = crate::ui::tooltip::build_tooltip(tree, node_id);
+                    let copied = self.copied_path.as_deref() == Some(info.full_path.as_str());
+                    self.hover_popup_bounds = Some(crate::ui::overlay::render_hover_popup(
+                        &mut self.scene,
+                        &mut self.text_renderer,
+                        &info,
+                        anchor,
+                        self.viewport_width,
+                        self.viewport_height,
+                        copied,
+                    ));
+                } else {
+                    self.hover_popup_bounds = None;
+                }
+            } else {
+                self.hover_popup_bounds = None;
+            }
 
             // DISABLED FOR DEBUGGING - Breadcrumb at top
             // if let Some(nav) = &self.navigation {
@@ -341,7 +356,6 @@ impl App {
             self.selected_popup_bounds = None;
         }
 
-        let sidebar_path_preview = self.sidebar_path_preview();
         self.sidebar_hit_regions = crate::ui::overlay::render_left_sidebar(
             &mut self.scene,
             &mut self.text_renderer,
@@ -350,8 +364,6 @@ impl App {
             &self.scan_path,
             &self.color_settings,
             self.show_hover_info,
-            sidebar_path_preview.as_deref(),
-            self.locked_path.is_some(),
         );
 
         if self.phase == AppPhase::Scanning {
@@ -456,21 +468,19 @@ impl App {
         self.selected_info = None;
         self.selected_anchor = None;
         self.selected_popup_bounds = None;
-        self.locked_path = None;
     }
 
     pub fn select_file_node(&mut self, node: NodeId, cursor: [f32; 2]) {
         if let Some(tree) = &self.tree {
             let info = crate::ui::tooltip::build_selection_info(tree, node);
-            self.locked_path = Some(info.full_path.clone());
             self.selected_node = Some(node);
             self.selected_info = Some(info);
             self.selected_anchor = Some(cursor);
         }
     }
 
-    pub fn open_selected_in_file_manager(&self) -> bool {
-        let (Some(tree), Some(node_id)) = (&self.tree, self.selected_node) else {
+    pub fn open_node_in_file_manager(&self, node_id: NodeId) -> bool {
+        let Some(tree) = &self.tree else {
             return false;
         };
 
@@ -488,10 +498,16 @@ impl App {
         open_in_file_manager(&full_path, &directory_path, node.is_dir)
     }
 
-    pub fn copy_locked_path_to_clipboard(&mut self) -> bool {
-        let Some(path) = self.locked_path.clone() else {
+    pub fn open_selected_in_file_manager(&self) -> bool {
+        self.selected_node
+            .is_some_and(|node| self.open_node_in_file_manager(node))
+    }
+
+    pub fn copy_node_path_to_clipboard(&mut self, node_id: NodeId) -> bool {
+        let Some(tree) = &self.tree else {
             return false;
         };
+        let path = crate::ui::tooltip::build_path(tree, node_id);
 
         // Retrying helps when the OS clipboard is briefly busy.
         let mut last_err: Option<String> = None;
@@ -502,7 +518,10 @@ impl App {
 
             if let Some(clipboard) = self.clipboard.as_mut() {
                 match clipboard.set_text(path.as_str()) {
-                    Ok(()) => return true,
+                    Ok(()) => {
+                        self.copied_path = Some(path);
+                        return true;
+                    }
                     Err(e) => {
                         last_err = Some(e.to_string());
                         self.clipboard = None;
@@ -521,20 +540,27 @@ impl App {
         false
     }
 
+    pub fn copy_selected_path_to_clipboard(&mut self) -> bool {
+        self.selected_node
+            .is_some_and(|node| self.copy_node_path_to_clipboard(node))
+    }
+
+    pub fn point_in_hover_popup(&self, x: f32, y: f32) -> bool {
+        self.hover_popup_bounds
+            .is_some_and(|[x1, y1, x2, y2]| x >= x1 && x <= x2 && y >= y1 && y <= y2)
+    }
+
+    pub fn point_near_hover_popup(&self, x: f32, y: f32) -> bool {
+        self.hover_popup_bounds.is_some_and(|[x1, y1, x2, y2]| {
+            x >= x1 - 20.0 && x <= x2 + 20.0 && y >= y1 - 20.0 && y <= y2 + 20.0
+        })
+    }
+
     pub fn vibrancy_track_bounds(&self) -> Option<[f32; 4]> {
         self.sidebar_hit_regions
             .iter()
             .find(|r| matches!(r.id, crate::ui::overlay::SidebarHitId::VibrancyTrack))
             .map(|r| r.bounds)
-    }
-
-    fn sidebar_path_preview(&self) -> Option<String> {
-        if let Some(path) = self.locked_path.clone() {
-            return Some(path);
-        }
-        let tree = self.tree.as_ref()?;
-        let node = self.hover_node?;
-        Some(crate::ui::tooltip::build_path(tree, node))
     }
 }
 
@@ -573,6 +599,7 @@ fn open_in_file_manager(
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
+        let _ = (full_path, is_dir);
         return Command::new("xdg-open")
             .arg(directory_path)
             .status()

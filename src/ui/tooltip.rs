@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Information to display in the tooltip when hovering over a node.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TooltipInfo {
     pub name: String,
     pub full_path: String,

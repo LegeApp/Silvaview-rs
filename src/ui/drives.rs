@@ -8,17 +8,28 @@ pub struct DriveEntry {
     pub available_bytes: u64,
 }
 
+pub fn default_scan_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from("C:\\")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/")
+    }
+}
+
 #[cfg(windows)]
 pub fn enumerate_drives() -> Vec<DriveEntry> {
     enumerate_drives_windows()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn enumerate_drives() -> Vec<DriveEntry> {
-    enumerate_drives_linux()
+    enumerate_drives_unix()
 }
 
-#[cfg(all(not(windows), not(target_os = "linux")))]
+#[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos")))]
 pub fn enumerate_drives() -> Vec<DriveEntry> {
     Vec::new()
 }
@@ -43,7 +54,7 @@ fn enumerate_drives_windows() -> Vec<DriveEntry> {
     if entries.is_empty() {
         entries.push(DriveEntry {
             label: "C:\\".to_string(),
-            path: PathBuf::from("C:\\"),
+            path: default_scan_path(),
             total_bytes: 0,
             available_bytes: 0,
         });
@@ -53,8 +64,8 @@ fn enumerate_drives_windows() -> Vec<DriveEntry> {
     entries
 }
 
-#[cfg(target_os = "linux")]
-fn enumerate_drives_linux() -> Vec<DriveEntry> {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn enumerate_drives_unix() -> Vec<DriveEntry> {
     let disks = sysinfo::Disks::new_with_refreshed_list();
     let mut entries: Vec<DriveEntry> = disks
         .iter()
@@ -73,10 +84,14 @@ fn enumerate_drives_linux() -> Vec<DriveEntry> {
         })
         .collect();
 
-    if entries.is_empty() {
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    entries.dedup_by(|a, b| a.path == b.path);
+
+    let default_path = default_scan_path();
+    if !entries.iter().any(|entry| entry.path == default_path) {
         entries.push(DriveEntry {
             label: "/".to_string(),
-            path: PathBuf::from("/"),
+            path: default_path,
             total_bytes: 0,
             available_bytes: 0,
         });

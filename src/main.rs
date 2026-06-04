@@ -36,6 +36,7 @@ struct SilvaViewApp {
 struct LastLeftClick {
     node: crate::tree::arena::NodeId,
     at: Instant,
+    popup: bool,
 }
 
 impl SilvaViewApp {
@@ -60,14 +61,22 @@ impl SilvaViewApp {
         }
     }
 
-    fn left_click_node(&mut self, node: crate::tree::arena::NodeId) -> bool {
+    fn left_click_node(&mut self, node: crate::tree::arena::NodeId, popup: bool) -> bool {
         let now = Instant::now();
         let is_double = self
             .last_left_click
             .as_ref()
-            .map(|last| last.node == node && now.duration_since(last.at).as_millis() <= 450)
+            .map(|last| {
+                last.node == node
+                    && last.popup == popup
+                    && now.duration_since(last.at).as_millis() <= 450
+            })
             .unwrap_or(false);
-        self.last_left_click = Some(LastLeftClick { node, at: now });
+        self.last_left_click = Some(LastLeftClick {
+            node,
+            at: now,
+            popup,
+        });
         is_double
     }
 }
@@ -154,13 +163,20 @@ impl ApplicationHandler for SilvaViewApp {
                 }
 
                 // Update hover state
-                let new_hover = if let Some(layout) = &self.app.layout {
+                let over_hover_popup = self
+                    .app
+                    .point_near_hover_popup(self.app.mouse.x, self.app.mouse.y);
+                let new_hover = if over_hover_popup {
+                    self.app.hover_node
+                } else if let Some(layout) = &self.app.layout {
                     input::hit_test(&layout.rects, self.app.mouse.x, self.app.mouse.y)
                 } else {
                     None
                 };
                 if new_hover != self.app.hover_node {
                     self.app.hover_node = new_hover;
+                    self.app.hover_anchor = new_hover.map(|_| [self.app.mouse.x, self.app.mouse.y]);
+                    self.app.copied_path = None;
                     if let Some(window) = &self.window {
                         window.request_redraw();
                     }
@@ -176,6 +192,25 @@ impl ApplicationHandler for SilvaViewApp {
                 }
 
                 if state == ElementState::Pressed && button == winit::event::MouseButton::Left {
+                    if self
+                        .app
+                        .point_in_hover_popup(self.app.mouse.x, self.app.mouse.y)
+                    {
+                        if let Some(node) = self.app.hover_node {
+                            if self.left_click_node(node, true) {
+                                if !self.app.open_node_in_file_manager(node) {
+                                    tracing::warn!("Failed to open path in file manager");
+                                }
+                            } else if self.app.copy_node_path_to_clipboard(node) {
+                                tracing::info!("Copied hovered path to clipboard");
+                            }
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                        return;
+                    }
+
                     if let Some([x1, y1, x2, y2]) = self.app.selected_popup_bounds {
                         if self.app.mouse.x >= x1
                             && self.app.mouse.x <= x2
@@ -232,11 +267,6 @@ impl ApplicationHandler for SilvaViewApp {
                             SidebarHitId::ToggleHoverInfo => {
                                 self.app.show_hover_info = !self.app.show_hover_info;
                             }
-                            SidebarHitId::CopyPath => {
-                                if self.app.copy_locked_path_to_clipboard() {
-                                    tracing::info!("Copied locked path to clipboard");
-                                }
-                            }
                         }
                         if let Some(window) = &self.window {
                             window.request_redraw();
@@ -260,7 +290,7 @@ impl ApplicationHandler for SilvaViewApp {
                             .as_ref()
                             .map(|tree| tree.get(node).is_dir)
                             .unwrap_or(false);
-                        let is_double = self.left_click_node(node);
+                        let is_double = self.left_click_node(node, false);
 
                         if is_double {
                             if is_dir {
@@ -288,7 +318,7 @@ impl ApplicationHandler for SilvaViewApp {
                 }
 
                 if state == ElementState::Pressed && button == winit::event::MouseButton::Right {
-                    if self.app.copy_locked_path_to_clipboard() {
+                    if self.app.copy_selected_path_to_clipboard() {
                         tracing::info!("Copied selected path to clipboard");
                     } else {
                         self.handle_action(input::InputAction::NavigateUp);
@@ -451,20 +481,11 @@ fn main() -> Result<()> {
         )
         .init();
 
-    // Parse command line: optional path argument, defaults to C:\
+    // Parse command line: optional path argument, defaults to the OS drive root.
     let scan_path = std::env::args()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            #[cfg(windows)]
-            {
-                PathBuf::from("C:\\")
-            }
-            #[cfg(not(windows))]
-            {
-                PathBuf::from("/")
-            }
-        });
+        .unwrap_or_else(ui::drives::default_scan_path);
 
     // Check for admin privileges if scanning a drive root
     #[cfg(windows)]

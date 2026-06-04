@@ -64,21 +64,27 @@ The result is the most faithful digital revival of the original cushion treemap 
 
 ### Build
 
-bash
+```bash
 cargo build --release
+```
 
 ### Run
 
-bash
-# Default: scans C:\ (Windows) or / (Linux/macOS)
+```bash
+# Default: scans C:\ on Windows.
+# On Linux, scans / while staying on its filesystem and skipping virtual mounts.
+# On macOS, scans / and lists mounted volumes in the sidebar.
 cargo run --release
 
 # Specific path
 cargo run --release -- "D:\\Rust-projects"
 # or
 cargo run --release -- "/home/user/Projects"
+```
 
 **Windows tip**: For maximum speed on drive roots, run as Administrator (the manifest will auto-prompt).
+
+**Linux tip**: `sudo` may expose more restricted directories, but it does not provide a Windows-style MFT fast path. If you need elevated access, build first and run the binary directly, for example `sudo ./target/release/Silvaview-rs`, so Cargo does not switch to root's cache and try to resolve dependencies over the network.
 
 ---
 
