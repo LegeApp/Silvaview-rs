@@ -9,7 +9,8 @@ name = "Silvaview-rs"
 path = "src/main.rs"
 
 [dependencies]
-# GPU rendering — local fork with texture override APIs enabled
+# GPU rendering. This local fork adds texture registration APIs used to
+# composite the GPU-rendered cushion treemap through Vello without CPU readback.
 vello = { path = "vello/vello" }
 winit = "0.30"
 
